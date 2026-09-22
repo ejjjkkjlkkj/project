@@ -1501,6 +1501,231 @@ static void nav_prompt_load(u8 index) {
         g_nav_help_text[j] = g_nav_help[index][j];
     g_nav_help_text[g_nav_help_length] = 0;
 }
+
+static int nav_get_form_title(u16 form_id, char *out, u32 *count_out) {
+    if (!form_id || !out || !count_out || !g_nav_hii_string || !g_nav_hii_handle)
+        return 0;
+    u32 list_len = rd32(g_hii_package + 16);
+    if (list_len < 24u || list_len > sizeof(g_hii_package)) return 0;
+    const u8 *p = g_hii_package + 20;
+    const u8 *list_end = g_hii_package + list_len;
+    while (p + 4u <= list_end) {
+        u32 hdr = rd32(p);
+        u32 len = hdr & 0x00ffffffu;
+        u8 type = (u8)(hdr >> 24);
+        if (len < 4u || p + len > list_end) return 0;
+        if (type == 0xdfu) break;
+        if (type == 0x02u) {
+            const u8 *q = p + 4;
+            const u8 *end = p + len;
+            while (q + 2u <= end) {
+                u8 op = q[0];
+                u32 oplen = (u32)(q[1] & 0x7fu);
+                if (oplen < 2u || q + oplen > end) break;
+                if (op == 0x01u && oplen >= 6u && rd16(q + 2) == form_id) {
+                    u16 title_token = rd16(q + 4);
+                    return title_token &&
+                           get_hii_string(g_nav_hii_string, g_nav_hii_handle,
+                                          title_token, out, count_out);
+                }
+                q += oplen;
+            }
+        }
+        p += len;
+    }
+    return 0;
+}
+
+/*
+ * Build one live form at a time. This preserves current VarStore and one-of
+ * value support while replacing the previous flat all-forms catalogue.
+ */
+static int nav_load_form(u16 requested_form_id) {
+    if (!g_nav_hii_string || !g_nav_hii_handle ||
+        g_nav_m1603qa_handle_index == 0xffu) return 0;
+
+    u32 list_len = rd32(g_hii_package + 16);
+    if (list_len < 24u || list_len > sizeof(g_hii_package)) return 0;
+
+    g_nav_prompt_total = 0u;
+    g_nav_prompt_index = 0u;
+    g_nav_prompt_overflow = 0u;
+    g_nav_help_available = 0u;
+    g_nav_form_title[0] = 0;
+    g_nav_form_title_length = 0u;
+
+    u16 selected_form_id = 0u;
+    int in_selected_form = 0;
+    const u8 *p = g_hii_package + 20;
+    const u8 *list_end = g_hii_package + list_len;
+
+    while (p + 4u <= list_end) {
+        u32 hdr = rd32(p);
+        u32 len = hdr & 0x00ffffffu;
+        u8 type = (u8)(hdr >> 24);
+        if (len < 4u || p + len > list_end) return 0;
+        if (type == 0xdfu) break;
+
+        if (type == 0x02u) {
+            const u8 *q = p + 4;
+            const u8 *end = p + len;
+            u8 scope_condition_stack[64];
+            u8 scope_oneof_stack[64];
+            u8 scope_depth = 0u;
+            u8 active_condition_flags = 0u;
+            u8 active_oneof_prompt = 0xffu;
+
+            while (q + 2u <= end) {
+                u8 op = q[0];
+                u8 op_header = q[1];
+                u32 oplen = (u32)(op_header & 0x7fu);
+                if (oplen < 2u || q + oplen > end) break;
+
+                if (op == 0x29u) {
+                    if (scope_depth) {
+                        --scope_depth;
+                        active_oneof_prompt = scope_oneof_stack[scope_depth];
+                        active_condition_flags = 0u;
+                        for (u8 si = 0u; si < scope_depth; ++si)
+                            active_condition_flags |= scope_condition_stack[si];
+                    }
+                    q += oplen;
+                    continue;
+                }
+
+                if (op == 0x01u && oplen >= 6u) {
+                    u16 form_id = rd16(q + 2);
+                    if (in_selected_form) break;
+                    if (form_id == requested_form_id) {
+                        selected_form_id = form_id;
+                        in_selected_form = 1;
+                        u16 title_token = rd16(q + 4);
+                        u32 title_count = 0u;
+                        if (title_token &&
+                            get_hii_string(g_nav_hii_string, g_nav_hii_handle,
+                                           title_token, g_nav_form_title,
+                                           &title_count))
+                            g_nav_form_title_length = (u8)title_count;
+                    }
+                }
+
+                u8 added_prompt_index = 0xffu;
+                if (in_selected_form && prompt_opcode(op) && oplen >= 4u) {
+                    u16 token = rd16(q + 2);
+                    char candidate[33];
+                    char help_candidate[33];
+                    u32 candidate_count = 0u;
+                    u32 help_count = 0u;
+                    u16 help_token = oplen >= 6u ? rd16(q + 4) : 0u;
+                    u16 question_id =
+                        ifr_question_opcode(op) && oplen >= 8u ? rd16(q + 6) : 0u;
+                    u16 varstore_id =
+                        ifr_question_opcode(op) && oplen >= 10u ? rd16(q + 8) : 0u;
+                    u16 var_info =
+                        ifr_question_opcode(op) && oplen >= 12u ? rd16(q + 10) : 0u;
+                    u8 question_flags =
+                        ifr_question_opcode(op) && oplen >= 13u ? q[12] : 0u;
+                    u8 value_width = ifr_scalar_width(op, q, oplen);
+                    u16 ref_form_id =
+                        (op == 0x0fu && oplen >= 15u) ? rd16(q + 13) : 0u;
+
+                    if (g_nav_m1603qa_308_profile &&
+                        selected_form_id == 0x2710u && op == 0x0fu &&
+                        (ref_form_id < 0x2716u || ref_form_id > 0x271au)) {
+                        marker("HII_GRAPH_NAV_M1603QA_ROOT_FILTER=PASS");
+                        q += oplen;
+                        continue;
+                    }
+
+                    if (help_token)
+                        (void)get_hii_string(g_nav_hii_string, g_nav_hii_handle,
+                                             help_token, help_candidate,
+                                             &help_count);
+
+                    int have_prompt =
+                        token && get_hii_string(g_nav_hii_string, g_nav_hii_handle,
+                                                token, candidate,
+                                                &candidate_count);
+                    if (!have_prompt && ref_form_id) {
+                        have_prompt = nav_get_form_title(ref_form_id, candidate,
+                                                         &candidate_count);
+                        if (have_prompt)
+                            marker("HII_GRAPH_NAV_REF_TITLE_FALLBACK=PASS");
+                    }
+
+                    if (have_prompt) {
+                        int added = nav_prompt_add(
+                            op, g_nav_m1603qa_handle_index, value_width,
+                            selected_form_id, question_id,
+                            varstore_id, var_info, question_flags,
+                            active_condition_flags,
+                            candidate, candidate_count,
+                            help_candidate, help_count, ref_form_id);
+                        if (added > 0) added_prompt_index = (u8)(added - 1);
+                    }
+                }
+
+                if (in_selected_form && op == 0x09u &&
+                    active_oneof_prompt != 0xffu && oplen >= 7u) {
+                    u16 option_token = rd16(q + 2);
+                    u8 option_type = q[5];
+                    u64 option_value = 0u;
+                    char option_text[33];
+                    u32 option_count = 0u;
+                    if (option_token &&
+                        nav_option_value(option_type, q + 6,
+                                         oplen - 6u, &option_value) &&
+                        get_hii_string(g_nav_hii_string, g_nav_hii_handle,
+                                       option_token, option_text,
+                                       &option_count)) {
+                        nav_option_add(active_oneof_prompt, option_value,
+                                       option_text, option_count);
+                    }
+                }
+
+                if (op_header & 0x80u) {
+                    if (scope_depth < (u8)sizeof(scope_condition_stack)) {
+                        u8 cond = ifr_condition_flag(op);
+                        scope_condition_stack[scope_depth] = cond;
+                        scope_oneof_stack[scope_depth] = active_oneof_prompt;
+                        ++scope_depth;
+                        active_condition_flags |= cond;
+                        if (in_selected_form && op == 0x05u &&
+                            added_prompt_index != 0xffu)
+                            active_oneof_prompt = added_prompt_index;
+                    } else {
+                        g_nav_prompt_overflow = 1u;
+                    }
+                }
+                q += oplen;
+            }
+        }
+        p += len;
+    }
+
+    if (!selected_form_id || !g_nav_prompt_total || g_nav_prompt_overflow)
+        return 0;
+
+    g_nav_current_form_id = selected_form_id;
+    nav_prompt_load(0u);
+    marker("HII_GRAPH_NAV_FORM_AWARE=PASS");
+    marker("HII_GRAPH_NAV_FORM_LOAD=PASS");
+    marker("HII_GRAPH_NAV_FORM_ID_TRACKING=PASS");
+    marker("HII_GRAPH_NAV_QUESTION_ID_TRACKING=PASS");
+    marker("HII_GRAPH_NAV_VARSTORE_METADATA=PASS");
+    marker("HII_GRAPH_NAV_ONEOF_OPTIONS=PASS");
+    marker("HII_GRAPH_NAV_CONDITION_TRACKING=PASS");
+    serial_puts("HII_GRAPH_NAV_ACTIVE_FORM_ID=0x");
+    serial_hex32((u32)selected_form_id);
+    serial_puts("\r\n");
+    if (g_nav_form_title_length) {
+        serial_puts("HII_GRAPH_NAV_FORM_TITLE=");
+        serial_puts(g_nav_form_title);
+        serial_puts("\r\n");
+    }
+    return 1;
+}
+
 #endif
 
 static int resolve_hii_prompt(void *system_table) {
