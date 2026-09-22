@@ -48,6 +48,14 @@ extern const u32 qev_word_pcm_bank_len;
 extern const u32 qev_word_pcm_rate_hz;
 extern const u32 qev_word_pcm_off[];
 extern const u32 qev_word_pcm_len[];
+extern const u8 qev_letter_pcm_bank[];
+extern const u32 qev_letter_pcm_bank_len;
+extern const u32 qev_letter_pcm_off[];
+extern const u32 qev_letter_pcm_len[];
+extern const u8 qev_digit_pcm_bank[];
+extern const u32 qev_digit_pcm_bank_len;
+extern const u32 qev_digit_pcm_off[];
+extern const u32 qev_digit_pcm_len[];
 
 #define MAX_NID 256
 #define MAX_CONN 64
@@ -1083,30 +1091,32 @@ static int speech_dma_begin(const char *text, u32 text_count) {
             total_bytes += grapheme_gap_bytes;
         }
 
-        const u8 *unit_row = 0;
-        u32 n = 0;
+        const u8 *spell_clip = 0;
+        u32 spell_bytes = 0u;
         if (ch >= (u8)'a' && ch <= (u8)'z') {
             u32 li = (u32)(ch - (u8)'a');
-            n = qev_letter_unit_count[li];
-            unit_row = qev_letter_units + li * 8u;
+            u32 off = qev_letter_pcm_off[li];
+            u32 len = qev_letter_pcm_len[li];
+            if (!len || off > qev_letter_pcm_bank_len ||
+                len > qev_letter_pcm_bank_len - off) return 0;
+            spell_clip = qev_letter_pcm_bank + off;
+            spell_bytes = len;
         } else if (ch >= (u8)'0' && ch <= (u8)'9') {
             u32 di = (u32)(ch - (u8)'0');
-            n = qev_digit_unit_count[di];
-            unit_row = qev_digit_units + di * 8u;
+            u32 off = qev_digit_pcm_off[di];
+            u32 len = qev_digit_pcm_len[di];
+            if (!len || off > qev_digit_pcm_bank_len ||
+                len > qev_digit_pcm_bank_len - off) return 0;
+            spell_clip = qev_digit_pcm_bank + off;
+            spell_bytes = len;
         } else {
             return 0;
         }
-        if (!unit_row || !n || n > 8u) return 0;
-        for (u32 j = 0; j < n; ++j) {
-            u32 ui = unit_row[j];
-            if (ui >= qev_unit_count) return 0;
-            u32 off = qev_unit_off[ui];
-            u32 len = qev_unit_len[ui];
-            if (!len || off > qev_unit_bank_len || len > qev_unit_bank_len - off) return 0;
-            if (total_bytes > dma_bytes - pcm_off || len > dma_bytes - pcm_off - total_bytes) return 0;
-            copy_bytes(pcm + total_bytes, qev_unit_bank + off, len);
-            total_bytes += len;
-        }
+        if (!speech_append_pcm8_16k(
+                pcm, &total_bytes, dma_bytes - pcm_off,
+                spell_clip, spell_bytes))
+            return 0;
+        marker("HII_GRAPH_SPEECH_SPOKEN_SPELLING_CLIP=PASS");
     }
     if (!total_bytes) return 0;
     if (total_bytes > dma_bytes - pcm_off ||
@@ -1119,6 +1129,7 @@ static int speech_dma_begin(const char *text, u32 text_count) {
     marker("HII_GRAPH_SPEECH_HYBRID_WORD_MODE=PASS");
     marker("HII_GRAPH_SPEECH_VOICECORE_WORD_MODE=PASS");
     marker("HII_GRAPH_SPEECH_UNKNOWN_WORD_FALLBACK=PASS");
+    marker("HII_GRAPH_SPEECH_NO_TONAL_FALLBACK=PASS");
     marker("HII_GRAPH_SPEECH_LONG_LABEL_CAPACITY=PASS");
 
     u32 dma_payload = (total_bytes + 127u) & ~127u;
