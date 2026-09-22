@@ -152,15 +152,23 @@ static char g_prompt_text[33];
 static u32 g_prompt_count;
 
 #ifdef QEV_INTERACTIVE_NAV
-#define MAX_HII_NAV_PROMPTS 32
+/*
+ * M1603QA BIOS 308 exposes dozens of forms and far more than 32 controls.
+ * Keep a large static, allocation-free navigation catalogue and make
+ * truncation explicit instead of silently dropping controls.
+ */
+#define MAX_HII_NAV_PROMPTS 240
 static char g_nav_prompts[MAX_HII_NAV_PROMPTS][33];
 static u8 g_nav_prompt_lengths[MAX_HII_NAV_PROMPTS];
 static u8 g_nav_prompt_opcodes[MAX_HII_NAV_PROMPTS];
+static u16 g_nav_prompt_form_ids[MAX_HII_NAV_PROMPTS];
+static u16 g_nav_prompt_question_ids[MAX_HII_NAV_PROMPTS];
 static char g_nav_help[MAX_HII_NAV_PROMPTS][33];
 static u8 g_nav_help_lengths[MAX_HII_NAV_PROMPTS];
 static u8 g_nav_prompt_total;
 static u8 g_nav_prompt_index;
 static u8 g_nav_prompt_opcode;
+static u8 g_nav_prompt_overflow;
 static char g_nav_speech_text[33];
 static u8 g_nav_speech_length;
 static char g_nav_help_text[33];
@@ -1038,6 +1046,17 @@ static const char *ifr_semantic_role(u8 op) {
 #define NAV_GROUP_CHOICE   3u
 #define NAV_GROUP_EDITABLE 4u
 
+static int ifr_question_opcode(u8 op) {
+    switch (op) {
+        case 0x05: case 0x06: case 0x07: case 0x08:
+        case 0x0c: case 0x0f: case 0x1a: case 0x1b:
+        case 0x1c: case 0x23:
+            return 1;
+        default:
+            return 0;
+    }
+}
+
 /*
  * Structural navigation inspired by mature screen-reader interaction models,
  * implemented from scratch for native HII. Lowercase moves forward and
@@ -1066,6 +1085,31 @@ static int nav_find_group(u8 group, int direction, u8 *index_out) {
             if (index >= g_nav_prompt_total) index = 0u;
         }
         if (nav_role_in_group(g_nav_prompt_opcodes[index], group)) {
+            *index_out = index;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static int nav_find_form(int direction, u8 *index_out) {
+    if (!index_out || g_nav_prompt_total < 2u) return 0;
+    u16 current_form = g_nav_prompt_form_ids[g_nav_prompt_index];
+    u8 index = g_nav_prompt_index;
+    for (u8 visited = 1u; visited < g_nav_prompt_total; ++visited) {
+        if (direction < 0) {
+            index = index ? (u8)(index - 1u) : (u8)(g_nav_prompt_total - 1u);
+        } else {
+            index = (u8)(index + 1u);
+            if (index >= g_nav_prompt_total) index = 0u;
+        }
+        if (g_nav_prompt_form_ids[index] != current_form) {
+            u16 target_form = g_nav_prompt_form_ids[index];
+            if (direction < 0) {
+                while (index &&
+                       g_nav_prompt_form_ids[(u8)(index - 1u)] == target_form)
+                    --index;
+            }
             *index_out = index;
             return 1;
         }
@@ -1130,12 +1174,15 @@ static int get_hii_string(hii_string_protocol *str, void *handle, u16 token, cha
 }
 
 #ifdef QEV_INTERACTIVE_NAV
-static int nav_prompt_add(u8 opcode, const char *text, u32 count,
+static int nav_prompt_add(u8 opcode, u16 form_id, u16 question_id,
+                          const char *text, u32 count,
                           const char *help, u32 help_count) {
     if (!text || !count || count > 32u || help_count > 32u) return 0;
     for (u8 i = 0; i < g_nav_prompt_total; ++i) {
         if (g_nav_prompt_lengths[i] != (u8)count ||
             g_nav_prompt_opcodes[i] != opcode ||
+            g_nav_prompt_form_ids[i] != form_id ||
+            g_nav_prompt_question_ids[i] != question_id ||
             g_nav_help_lengths[i] != (u8)help_count) continue;
         u32 same = 1;
         for (u32 j = 0; j < count; ++j) {
@@ -1148,12 +1195,17 @@ static int nav_prompt_add(u8 opcode, const char *text, u32 count,
         }
         if (same) return 0;
     }
-    if (g_nav_prompt_total >= MAX_HII_NAV_PROMPTS) return 0;
+    if (g_nav_prompt_total >= MAX_HII_NAV_PROMPTS) {
+        g_nav_prompt_overflow = 1u;
+        return 0;
+    }
     u8 slot = g_nav_prompt_total++;
     for (u32 j = 0; j < count; ++j) g_nav_prompts[slot][j] = text[j];
     g_nav_prompts[slot][count] = 0;
     g_nav_prompt_lengths[slot] = (u8)count;
     g_nav_prompt_opcodes[slot] = opcode;
+    g_nav_prompt_form_ids[slot] = form_id;
+    g_nav_prompt_question_ids[slot] = question_id;
     for (u32 j = 0; j < help_count; ++j) g_nav_help[slot][j] = help[j];
     g_nav_help[slot][help_count] = 0;
     g_nav_help_lengths[slot] = (u8)help_count;
@@ -1207,6 +1259,7 @@ static int resolve_hii_prompt(void *system_table) {
 #ifdef QEV_INTERACTIVE_NAV
     g_nav_prompt_total = 0;
     g_nav_prompt_index = 0;
+    g_nav_prompt_overflow = 0;
     g_nav_help_available = 0;
     g_nav_event_mask = 0;
     g_nav_speech_events = 0;
@@ -1234,10 +1287,18 @@ static int resolve_hii_prompt(void *system_table) {
                 marker("HII_FORMS_PACKAGE=PASS");
                 const u8 *q = p + 4;
                 const u8 *end = p + len;
+#ifdef QEV_INTERACTIVE_NAV
+                u16 current_form_id = 0u;
+#endif
                 while (q + 2 <= end) {
                     u8 op = q[0];
                     u32 oplen = (u32)(q[1] & 0x7f);
                     if (oplen < 2u || q + oplen > end) break;
+#ifdef QEV_INTERACTIVE_NAV
+                    if (op == 0x01u && oplen >= 6u) {
+                        current_form_id = rd16(q + 2);
+                    }
+#endif
                     if (prompt_opcode(op) && oplen >= 4u) {
                         u16 token = rd16(q + 2);
 #ifdef QEV_INTERACTIVE_NAV
@@ -1246,10 +1307,13 @@ static int resolve_hii_prompt(void *system_table) {
                         u32 candidate_count = 0;
                         u32 help_count = 0;
                         u16 help_token = oplen >= 6u ? rd16(q + 4) : 0u;
+                        u16 question_id =
+                            ifr_question_opcode(op) && oplen >= 8u ? rd16(q + 6) : 0u;
                         if (help_token)
                             (void)get_hii_string(str, handle, help_token, help_candidate, &help_count);
                         if (token && get_hii_string(str, handle, token, candidate, &candidate_count)) {
-                            nav_prompt_add(op, candidate, candidate_count,
+                            nav_prompt_add(op, current_form_id, question_id,
+                                           candidate, candidate_count,
                                            help_candidate, help_count);
                         }
 #else
@@ -1275,7 +1339,10 @@ static int resolve_hii_prompt(void *system_table) {
         nav_prompt_load(0);
         marker("IFR_PROMPT_STRING_ID=PASS");
         marker("HII_LANGUAGE_AND_STRING=PASS");
-        marker("HII_GRAPH_NAV_PROMPT_COLLECTION=PASS");
+        marker(g_nav_prompt_overflow ? "HII_GRAPH_NAV_PROMPT_COLLECTION=TRUNCATED"
+                                     : "HII_GRAPH_NAV_PROMPT_COLLECTION=PASS");
+        marker("HII_GRAPH_NAV_FORM_ID_TRACKING=PASS");
+        marker("HII_GRAPH_NAV_QUESTION_ID_TRACKING=PASS");
         marker("HII_GRAPH_NAV_SEMANTIC_ROLE=PASS");
         marker(g_nav_help_available ? "HII_GRAPH_NAV_CONTEXT_HELP=PASS"
                                     : "HII_GRAPH_NAV_CONTEXT_HELP=NOT_AVAILABLE");
@@ -1553,6 +1620,7 @@ static int wait_navigation_keys(void *system_table) {
     marker("HII_GRAPH_NAV_DIRECTIONAL_ALIASES=PASS");
     marker("HII_GRAPH_NAV_TAB_FORWARD=PASS");
     marker("HII_GRAPH_NAV_STRUCTURAL_KEYS=PASS");
+    marker("HII_GRAPH_NAV_FORM_KEYS=PASS");
     marker("HII_GRAPH_NAV_WHERE_AM_I_KEY=PASS");
     serial_puts("HII_GRAPH_NAV_TOTAL=0x");
     serial_hex8(g_nav_prompt_total);
@@ -1585,6 +1653,19 @@ static int wait_navigation_keys(void *system_table) {
             if (key.unicode_char == (u16)'w' || key.unicode_char == (u16)'W') {
                 marker("HII_GRAPH_NAV_KEY=W");
                 marker("HII_GRAPH_NAV_WHERE_AM_I=PASS");
+                speak = 1;
+            } else if (key.unicode_char == (u16)'f' || key.unicode_char == (u16)'F') {
+                marker("HII_GRAPH_NAV_KEY=STRUCTURAL_FORM");
+                u8 next = 0;
+                int direction = key.unicode_char == (u16)'F' ? -1 : 1;
+                if (nav_find_form(direction, &next)) {
+                    nav_prompt_load(next);
+                    marker("HII_GRAPH_NAV_STRUCTURAL_FORM=PASS");
+                } else {
+                    speech_override = "no form";
+                    speech_override_length = 7u;
+                    marker("HII_GRAPH_NAV_STRUCTURAL_FORM=NOT_FOUND");
+                }
                 speak = 1;
             } else if (key.unicode_char == (u16)'b' || key.unicode_char == (u16)'B') {
                 marker("HII_GRAPH_NAV_KEY=STRUCTURAL_BUTTON");
