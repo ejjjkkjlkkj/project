@@ -258,6 +258,8 @@ static char g_nav_position_text[33];
 static u8 g_nav_position_length;
 static char g_nav_where_text[33];
 static u8 g_nav_where_length;
+static char g_nav_edit_status_text[33];
+static u8 g_nav_edit_status_length;
 static u8 g_nav_help_available;
 static u16 g_nav_current_form_id;
 static char g_nav_form_title[33];
@@ -1424,6 +1426,26 @@ static void nav_stage_clear_all(void) {
     g_nav_staged_total = 0u;
 }
 
+static u8 nav_stage_count(void) {
+    u8 count = 0u;
+    for (u8 i = 0u; i < g_nav_staged_total; ++i)
+        if (g_nav_staged_values[i].valid) ++count;
+    return count;
+}
+
+static int nav_stage_discard_prompt(u8 prompt_index) {
+    if (prompt_index >= g_nav_prompt_total) return 0;
+    nav_staged_value *e = nav_stage_find(
+        g_nav_prompt_handle_indices[prompt_index],
+        g_nav_prompt_question_ids[prompt_index]);
+    if (!e) return 0;
+    e->valid = 0u;
+    while (g_nav_staged_total &&
+           !g_nav_staged_values[g_nav_staged_total - 1u].valid)
+        --g_nav_staged_total;
+    return 1;
+}
+
 static int nav_effective_scalar_value(void *system_table, u8 prompt_index,
                                       u64 *value_out, u8 *staged_out) {
     if (!value_out || prompt_index >= g_nav_prompt_total) return 0;
@@ -1507,6 +1529,26 @@ static u8 nav_append_decimal(char *out, u8 n, u8 cap, u32 value) {
     } while (value && count < (u8)sizeof(digits));
     while (count && n < cap) out[n++] = digits[--count];
     return n;
+}
+
+static int nav_build_edit_status_speech(char *out, u8 *length_out) {
+    if (!out || !length_out) return 0;
+    u8 count = nav_stage_count();
+    if (!count) {
+        static const char none[] = "no pending edits";
+        u8 n = 0u;
+        while (none[n] && n < 32u) { out[n] = none[n]; ++n; }
+        out[n] = 0;
+        *length_out = n;
+        return 1;
+    }
+    static const char prefix[] = "pending edits ";
+    u8 n = 0u;
+    for (u8 i = 0u; prefix[i] && n < 32u; ++i) out[n++] = prefix[i];
+    n = nav_append_decimal(out, n, 32u, count);
+    out[n] = 0;
+    *length_out = n;
+    return 1;
 }
 
 static int nav_build_position_speech(u8 prompt_index, char *out, u8 *length_out) {
@@ -3066,6 +3108,27 @@ static int wait_navigation_keys(void *system_table) {
                     marker("HII_GRAPH_NAV_STAGED_CHECKBOX=NOT_AVAILABLE");
                     speak = 1;
                 }
+            } else if (key.unicode_char == (u16)'m' || key.unicode_char == (u16)'M') {
+                marker("HII_GRAPH_NAV_KEY=M");
+                if (nav_build_edit_status_speech(g_nav_edit_status_text,
+                                                 &g_nav_edit_status_length)) {
+                    speech_override = g_nav_edit_status_text;
+                    speech_override_length = g_nav_edit_status_length;
+                    marker("HII_GRAPH_NAV_STAGED_STATUS_SPEECH=PASS");
+                }
+                speak = 1;
+            } else if (key.unicode_char == (u16)'z' || key.unicode_char == (u16)'Z') {
+                marker("HII_GRAPH_NAV_KEY=Z");
+                if (nav_stage_discard_prompt(g_nav_prompt_index)) {
+                    speech_override = "edit discarded";
+                    speech_override_length = 14u;
+                    marker("HII_GRAPH_NAV_STAGED_CURRENT_DISCARD=PASS");
+                } else {
+                    speech_override = "no pending edit";
+                    speech_override_length = 15u;
+                    marker("HII_GRAPH_NAV_STAGED_CURRENT_DISCARD=NOT_AVAILABLE");
+                }
+                speak = 1;
             } else if (key.unicode_char == (u16)'d' || key.unicode_char == (u16)'D') {
                 marker("HII_GRAPH_NAV_KEY=D");
                 nav_stage_clear_all();
