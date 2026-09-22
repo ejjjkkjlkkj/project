@@ -2,15 +2,17 @@
 """Drive a running QEMU UEFI screen reader through QMP/HMP sendkey.
 
 The scenario is intentionally non-destructive:
-F1 help -> Down -> Up -> Escape.  It proves keyboard delivery, realtime
-navigation and speech triggering without committing firmware changes.
+F1 help -> Down -> Up -> Escape.
+
+Default mode proves rapid keyboard delivery and speech interruption. With
+--wait-speech-complete, each spoken navigation event is allowed to finish before
+the next key so the captured WAV can be validated bit-for-bit.
 """
 from __future__ import annotations
 
 import argparse
 import json
 import socket
-import sys
 import time
 from pathlib import Path
 
@@ -67,19 +69,30 @@ class QMP:
             self.sock.close()
 
 
-def contains(path: Path, marker: str) -> bool:
+def read_text(path: Path) -> str:
     try:
-        return marker in path.read_text(encoding="utf-8", errors="ignore")
+        return path.read_text(encoding="utf-8", errors="ignore")
     except FileNotFoundError:
-        return False
+        return ""
+
+
+def contains(path: Path, marker: str) -> bool:
+    return marker in read_text(path)
+
+
+def count_marker(path: Path, marker: str) -> int:
+    return read_text(path).count(marker)
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--qmp", required=True, type=Path)
     parser.add_argument("--serial", required=True, type=Path)
+    parser.add_argument("--report", type=Path)
     parser.add_argument("--timeout", type=float, default=30.0)
     parser.add_argument("--delay", type=float, default=0.75)
+    parser.add_argument("--wait-speech-complete", action="store_true")
+    parser.add_argument("--speech-timeout", type=float, default=45.0)
     args = parser.parse_args()
 
     wait_for(args.qmp.exists, args.timeout, "QMP socket")
@@ -99,15 +112,37 @@ def main() -> int:
     evidence: list[dict[str, str]] = []
     try:
         for key, marker in scenario:
+            completed_before = count_marker(
+                args.serial, "HII_GRAPH_SPEECH_PHRASE_COMPLETE=PASS"
+            )
             qmp.hmp(f"sendkey {key}")
             wait_for(
                 lambda marker=marker: contains(args.serial, marker),
                 5.0,
                 marker,
             )
-            evidence.append({"key": key, "marker": marker, "status": "PASS"})
+            item = {"key": key, "marker": marker, "status": "PASS"}
+            evidence.append(item)
             print(f"QEMU_KEY_{key.upper()}=PASS")
-            time.sleep(args.delay)
+
+            if args.wait_speech_complete and key != "esc":
+                wait_for(
+                    lambda before=completed_before: count_marker(
+                        args.serial, "HII_GRAPH_SPEECH_PHRASE_COMPLETE=PASS"
+                    )
+                    > before,
+                    args.speech_timeout,
+                    f"completed speech after {key}",
+                )
+                item["speech_complete"] = "PASS"
+                print(f"QEMU_SPEECH_{key.upper()}_COMPLETE=PASS")
+                # The HDA IOC proves the guest consumed the whole DMA buffer,
+                # but QEMU's WAV backend may still have host-side frames to
+                # flush. Preserve a small capture margin before the next key
+                # (especially Escape/quit after the final utterance).
+                time.sleep(args.delay)
+            else:
+                time.sleep(args.delay)
 
         wait_for(
             lambda: contains(args.serial, "HII_GRAPH_NAV_EXIT=PASS"),
@@ -116,6 +151,8 @@ def main() -> int:
         )
         print("NAVIGATION_INPUT=PASS")
         print("NAVIGATION_RUNTIME=PASS")
+        if args.wait_speech_complete:
+            print("NAVIGATION_COMPLETE_SPEECH_SCENARIO=PASS")
         try:
             qmp.execute("quit")
         except RuntimeError:
@@ -124,9 +161,17 @@ def main() -> int:
     finally:
         qmp.close()
 
-    report = args.serial.parent / "qemu-navigation-report.json"
+    report = args.report or (args.serial.parent / "qemu-navigation-report.json")
     report.write_text(
-        json.dumps({"scenario": evidence, "status": "PASS"}, indent=2) + "\n",
+        json.dumps(
+            {
+                "scenario": evidence,
+                "wait_speech_complete": args.wait_speech_complete,
+                "status": "PASS",
+            },
+            indent=2,
+        )
+        + "\n",
         encoding="utf-8",
     )
     return 0
