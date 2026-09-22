@@ -231,6 +231,8 @@ static char g_nav_value_text[33];
 static u8 g_nav_value_length;
 static char g_nav_focus_speech[33];
 static u8 g_nav_focus_speech_length;
+static char g_nav_position_text[33];
+static u8 g_nav_position_length;
 static u8 g_nav_help_available;
 static u16 g_nav_current_form_id;
 static char g_nav_form_title[33];
@@ -1344,6 +1346,32 @@ static int nav_live_value_text(void *system_table, u8 prompt_index,
 
     return nav_format_u64(live_value, g_nav_value_text, &g_nav_value_length) &&
            ((*text_out = g_nav_value_text), (*length_out = g_nav_value_length), 1);
+}
+
+static u8 nav_append_decimal(char *out, u8 n, u8 cap, u32 value) {
+    char digits[10];
+    u8 count = 0u;
+    do {
+        digits[count++] = (char)('0' + (value % 10u));
+        value /= 10u;
+    } while (value && count < (u8)sizeof(digits));
+    while (count && n < cap) out[n++] = digits[--count];
+    return n;
+}
+
+static int nav_build_position_speech(u8 prompt_index, char *out, u8 *length_out) {
+    if (!out || !length_out || prompt_index >= g_nav_prompt_total ||
+        !g_nav_prompt_total) return 0;
+    static const char prefix[] = "position ";
+    static const char middle[] = " of ";
+    u8 n = 0u;
+    for (u8 i = 0u; prefix[i] && n < 32u; ++i) out[n++] = prefix[i];
+    n = nav_append_decimal(out, n, 32u, (u32)prompt_index + 1u);
+    for (u8 i = 0u; middle[i] && n < 32u; ++i) out[n++] = middle[i];
+    n = nav_append_decimal(out, n, 32u, (u32)g_nav_prompt_total);
+    out[n] = 0;
+    *length_out = n;
+    return n != 0u;
 }
 
 static int nav_build_focus_speech(void *system_table, u8 prompt_index,
@@ -2597,6 +2625,7 @@ static int wait_navigation_keys(void *system_table) {
     marker("HII_GRAPH_NAV_FORM_KEYS=PASS");
     marker("HII_GRAPH_NAV_LIVE_VALUE_KEY=PASS");
     marker("HII_GRAPH_NAV_WHERE_AM_I_KEY=PASS");
+    marker("HII_GRAPH_NAV_POSITION_KEY=PASS");
     serial_puts("HII_GRAPH_NAV_TOTAL=0x");
     serial_hex8(g_nav_prompt_total);
     serial_puts("\r\n");
@@ -2744,6 +2773,20 @@ static int wait_navigation_keys(void *system_table) {
                     speech_override = "no editable";
                     speech_override_length = 11u;
                     marker("HII_GRAPH_NAV_STRUCTURAL_EDITABLE=NOT_FOUND");
+                }
+                speak = 1;
+            } else if (key.unicode_char == (u16)'p' || key.unicode_char == (u16)'P') {
+                marker("HII_GRAPH_NAV_KEY=P");
+                if (nav_build_position_speech(g_nav_prompt_index,
+                                              g_nav_position_text,
+                                              &g_nav_position_length)) {
+                    speech_override = g_nav_position_text;
+                    speech_override_length = g_nav_position_length;
+                    marker("HII_GRAPH_NAV_POSITION_SPEECH=PASS");
+                } else {
+                    speech_override = "no position";
+                    speech_override_length = 11u;
+                    marker("HII_GRAPH_NAV_POSITION_SPEECH=NOT_AVAILABLE");
                 }
                 speak = 1;
             } else if (key.unicode_char == (u16)'h' || key.unicode_char == (u16)'H') {
