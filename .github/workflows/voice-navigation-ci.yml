@@ -51,10 +51,15 @@ jobs:
           set -euo pipefail
           sudo apt-get update
           sudo apt-get install -y clang lld
+          clang -std=c11 -Wall -Wextra -Werror -pedantic navigation/uefi/semantic_core.c navigation/uefi/test_semantic_core.c -o build/semantic_core_test
+          ./build/semantic_core_test | tee build/semantic_core-test.txt
+          grep -F 'UEFI_SEMANTIC_CORE_TESTS=PASS' build/semantic_core-test.txt
           flags='--target=x86_64-pc-windows-msvc -DQEV_INTERACTIVE_NAV=1 -ffreestanding -fshort-wchar -fno-stack-protector -fno-builtin -mno-red-zone -nostdlib -O2 -Wall -Wextra -Werror'
+          clang $flags -c navigation/uefi/semantic_core.c -o build/semantic_core.obj
+          test -s build/semantic_core.obj
           clang $flags -c navigation/uefi/hii_graph_prompt_speech_uefi.c -o build/navigation.obj
           clang $flags -c build/navigation_units.c -o build/navigation_units.obj
-          lld-link /subsystem:efi_application /entry:efi_main /nodefaultlib /machine:x64 /timestamp:0 /out:build/NAVIGATION.EFI build/navigation.obj build/navigation_units.obj
+          lld-link /subsystem:efi_application /entry:efi_main /nodefaultlib /machine:x64 /timestamp:0 /out:build/NAVIGATION.EFI build/navigation.obj build/navigation_units.obj build/semantic_core.obj
           test -s build/NAVIGATION.EFI
           grep -aF 'HII_GRAPH_NAV_REALTIME_MODE=INTERRUPTIBLE_DMA' build/NAVIGATION.EFI
           grep -aF 'HII_GRAPH_NAV_REALTIME_FOCUS_SPEECH=PASS' build/NAVIGATION.EFI
@@ -142,4 +147,6 @@ jobs:
           path: |
             build/NAVIGATION.EFI
             build/navigation_units.txt
+            build/semantic_core-test.txt
+            build/semantic_core.obj
           if-no-files-found: error
