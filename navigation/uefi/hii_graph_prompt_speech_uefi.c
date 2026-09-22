@@ -229,6 +229,8 @@ static char g_nav_help_text[33];
 static u8 g_nav_help_length;
 static char g_nav_value_text[33];
 static u8 g_nav_value_length;
+static char g_nav_focus_speech[33];
+static u8 g_nav_focus_speech_length;
 static u8 g_nav_help_available;
 static u16 g_nav_current_form_id;
 static char g_nav_form_title[33];
@@ -1342,6 +1344,52 @@ static int nav_live_value_text(void *system_table, u8 prompt_index,
 
     return nav_format_u64(live_value, g_nav_value_text, &g_nav_value_length) &&
            ((*text_out = g_nav_value_text), (*length_out = g_nav_value_length), 1);
+}
+
+static int nav_build_focus_speech(void *system_table, u8 prompt_index,
+                                  char *out, u8 *length_out) {
+    if (!system_table || !out || !length_out ||
+        prompt_index >= g_nav_prompt_total) return 0;
+
+    const char *value_text = 0;
+    u8 value_length = 0u;
+    u8 checkbox_state = 0u;
+    if (!nav_live_value_text(system_table, prompt_index,
+                             &value_text, &value_length,
+                             &checkbox_state) ||
+        !value_text || !value_length)
+        return 0;
+
+    if (value_length >= 32u) {
+        for (u8 i = 0u; i < 32u; ++i) out[i] = value_text[i];
+        out[32] = 0;
+        *length_out = 32u;
+        return 1;
+    }
+
+    /* Preserve the live value at the end: it is more important than a
+       truncated label for blind operation. Role/state remain at the front. */
+    u8 budget = (u8)(32u - value_length - 1u);
+    u8 n = 0u;
+    const char *role = ifr_semantic_role(g_nav_prompt_opcodes[prompt_index]);
+    while (*role && n < budget) out[n++] = *role++;
+
+    const char *state = 0;
+    if (g_nav_prompt_condition_flags[prompt_index] & NAV_COND_GRAY)
+        state = " disabled";
+    else if (g_nav_prompt_condition_flags[prompt_index] & NAV_COND_UNKNOWN)
+        state = " conditional";
+    if (state) while (*state && n < budget) out[n++] = *state++;
+
+    if (n < budget && g_nav_prompt_lengths[prompt_index]) out[n++] = ' ';
+    for (u8 i = 0u; i < g_nav_prompt_lengths[prompt_index] && n < budget; ++i)
+        out[n++] = g_nav_prompts[prompt_index][i];
+    if (n && n < 32u) out[n++] = ' ';
+    for (u8 i = 0u; i < value_length && n < 32u; ++i)
+        out[n++] = value_text[i];
+    out[n] = 0;
+    *length_out = n;
+    return n != 0u;
 }
 
 static int nav_read_varstore_scalar(void *system_table, u8 handle_index,
@@ -2748,6 +2796,14 @@ static int wait_navigation_keys(void *system_table) {
             if (speak) {
                 const char *speech_text = speech_override ? speech_override : g_nav_speech_text;
                 u8 speech_length = speech_override ? speech_override_length : g_nav_speech_length;
+                if (!speech_override && !speak_help &&
+                    nav_build_focus_speech(system_table, g_nav_prompt_index,
+                                           g_nav_focus_speech,
+                                           &g_nav_focus_speech_length)) {
+                    speech_text = g_nav_focus_speech;
+                    speech_length = g_nav_focus_speech_length;
+                    marker("HII_GRAPH_NAV_FOCUS_VALUE_SPEECH=PASS");
+                }
                 if (speak_help) {
                     if (g_nav_help_length) {
                         speech_text = g_nav_help_text;
@@ -2911,7 +2967,16 @@ __attribute__((ms_abi)) u64 efi_main(void *image_handle, void *system_table) {
     marker("BDL_RUNTIME_TEXT_SCHEDULE=PASS");
 
 #ifdef QEV_INTERACTIVE_NAV
-    if (!run_speech_dma(g_nav_speech_text, g_nav_speech_length)) {
+    const char *initial_speech = g_nav_speech_text;
+    u8 initial_speech_length = g_nav_speech_length;
+    if (nav_build_focus_speech(system_table, g_nav_prompt_index,
+                               g_nav_focus_speech,
+                               &g_nav_focus_speech_length)) {
+        initial_speech = g_nav_focus_speech;
+        initial_speech_length = g_nav_focus_speech_length;
+        marker("HII_GRAPH_NAV_INITIAL_VALUE_SPEECH=PASS");
+    }
+    if (!run_speech_dma(initial_speech, initial_speech_length)) {
 #else
     if (!run_speech_dma(g_prompt_text, g_prompt_count)) {
 #endif
@@ -2924,7 +2989,7 @@ __attribute__((ms_abi)) u64 efi_main(void *image_handle, void *system_table) {
     marker("LPIB_PROGRESS=PASS");
     marker("HII_GRAPH_NAV_REALTIME_CAPABLE=PASS");
 #ifdef QEV_INTERACTIVE_NAV
-    marker("HII_GRAPH_NAV_SEMANTIC_SPEECH=ROLE_PLUS_LABEL");
+    marker("HII_GRAPH_NAV_SEMANTIC_SPEECH=ROLE_STATE_LABEL_VALUE");
 #endif
     if (g_controller_preferred && g_codec_vendor_id == 0x10ec0256u) {
         marker("PHYSICAL_ASUS_M1603QA_HDA_RUNTIME=PASS");
