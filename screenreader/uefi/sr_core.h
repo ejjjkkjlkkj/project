@@ -89,7 +89,9 @@ typedef enum {
     SR_CMD_PREVIOUS_CHECKBOX,
     SR_CMD_NEXT_CHOICE,
     SR_CMD_PREVIOUS_CHOICE,
-    SR_CMD_ITEM_CHOOSER
+    SR_CMD_ITEM_CHOOSER,
+    SR_CMD_VALUE_PREVIOUS,
+    SR_CMD_VALUE_NEXT
 } sr_command;
 
 typedef struct {
