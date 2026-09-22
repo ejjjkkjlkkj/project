@@ -83,3 +83,5 @@ This gives the navigation layer a complete edit interaction model without riskin
 The reader now preserves metadata for `OneOf`, `Numeric`, `String`, `Password`, `OrderedList`, `Date`, and `Time` opcodes. Numeric limits and step values, string size limits, ordered-list capacity, and date/time storage class can be spoken with `L`.
 
 Password questions have a hard privacy rule: the reader announces **protected** and does not attempt to read the underlying VarStore value for speech. Preview changes are still RAM-only. When a staged choice, checkbox, or numeric control affects a `SuppressIf`, `GrayOutIf`, or `DisableIf` expression, `R` and the automatic post-edit refresh evaluate the dependency using the staged value so the previewed form structure matches the proposed setting without writing firmware.
+
+Question-header flags are also semantic: `READ_ONLY`, `CALLBACK`, `RESET_REQUIRED`, `RECONNECT_REQUIRED`, and `OPTIONS_ONLY` are tracked. Read-only questions cannot be staged; callback/reset/reconnect requirements are exposed through control details so a future commit transaction cannot silently bypass firmware behavior.
