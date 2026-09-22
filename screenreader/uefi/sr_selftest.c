@@ -105,6 +105,12 @@ int main(void) {
     key.modifiers = 0;
     key.unicode_char = (sr_u16)'w';
     if (!check(sr_key_to_command(key) == SR_CMD_WHERE_AM_I, "where-am-i key")) return 1;
+    key.unicode_char = 0;
+    key.scan_code = 0x0003u;
+    if (!check(sr_key_to_command(key) == SR_CMD_VALUE_NEXT, "right adjusts next value")) return 1;
+    key.scan_code = 0x0004u;
+    if (!check(sr_key_to_command(key) == SR_CMD_VALUE_PREVIOUS, "left adjusts previous value")) return 1;
+    key.scan_code = 0;
     key.unicode_char = 0x0009u;
     if (!check(sr_key_to_command(key) == SR_CMD_NEXT, "tab next")) return 1;
     key.modifiers = SR_MOD_SHIFT;
