@@ -329,6 +329,11 @@ wait = text[wait_start:wait_end]
 assert "speech_phrase_begin(speech_text, speech_length)" in wait
 assert "speech_phrase_poll(1000u, &progressed)" in wait
 assert "speech_phrase_cancel()" in wait
+assert "HII_GRAPH_NAV_EXIT=BLOCKED_INCOMPLETE" not in wait
+assert "HII_GRAPH_NAV_DIRECTIONAL_ALIASES=PASS" not in wait
+assert "HII_GRAPH_NAV_SIMPLE_EXIT=PASS" in wait
+assert "HII_GRAPH_NAV_ENTER_CONTEXT_ACTION=PASS" in wait
+assert "NAV_COND_DISABLE" in wait
 
 run_start = text.index("static int run_speech_dma")
 run_end = text.index("static u16 rd16", run_start)
