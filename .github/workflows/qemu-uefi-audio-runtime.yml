@@ -72,11 +72,12 @@ jobs:
             exit 1
           fi
           cp "$OVMF_VARS" build/OVMF_VARS.fd
+          cp "$OVMF_VARS" build/OVMF_VARS.complete.fd
           echo "OVMF_CODE=$OVMF_CODE" >> "$GITHUB_ENV"
           echo "OVMF_LAYOUT=$(basename "$OVMF_CODE")"
           echo OVMF=PASS
 
-      - name: Boot UEFI, drive blind navigation, and capture HDA WAV
+      - name: Boot UEFI, drive blind navigation, and capture interruptible HDA WAV
         run: |
           set -euo pipefail
           rm -f build/qemu-serial.log build/qemu-audio.wav build/ovmf-debug.log build/qmp.sock build/qemu-navigation-report.json
@@ -90,10 +91,8 @@ jobs:
           }
           trap cleanup EXIT
 
-          python navigation/uefi/qmp_navigation_smoke.py             --qmp build/qmp.sock             --serial build/qemu-serial.log             --timeout 30             --delay 0.75             | tee build/qemu-navigation-analysis.txt
+          python navigation/uefi/qmp_navigation_smoke.py             --qmp build/qmp.sock             --serial build/qemu-serial.log             --report build/qemu-navigation-report.json             --timeout 30             --delay 0.75             | tee build/qemu-navigation-analysis.txt
 
-          # qmp_navigation_smoke sends QMP quit after the non-destructive
-          # F1/Down/Up/Escape scenario, which also finalizes the WAV backend.
           for _ in $(seq 1 100); do
             if ! kill -0 "$qemu_pid" 2>/dev/null; then break; fi
             sleep 0.05
@@ -133,7 +132,7 @@ jobs:
           echo NAVIGATION_INPUT=PASS
           echo NAVIGATION_SPEECH_TRIGGER=PASS
 
-      - name: Validate captured PCM signal
+      - name: Validate captured interruptible PCM signal
         run: |
           set -euo pipefail
           python navigation/uefi/analyze_wav_evidence.py build/qemu-audio.wav build/qemu-audio-report.json | tee build/qemu-audio-analysis.txt
@@ -144,6 +143,43 @@ jobs:
           python navigation/uefi/verify_speech_pcm.py build/qemu-audio.wav build/qemu-speech-content-report.json | tee build/qemu-speech-content-analysis.txt
           grep -F 'DISCOVERY_SPEECH_CONTENT=PASS' build/qemu-speech-content-analysis.txt
           grep -F 'DISCOVERY_SPEECH_PCM_EXACT=PASS' build/qemu-speech-content-analysis.txt
+
+      - name: Boot UEFI and capture completed navigation speech
+        run: |
+          set -euo pipefail
+          rm -f build/qemu-serial-complete.log build/qemu-audio-complete.wav build/ovmf-debug-complete.log build/qmp-complete.sock build/qemu-navigation-complete-report.json
+          qemu-system-x86_64             -machine q35,accel=tcg             -m 512M             -smp 1             -nodefaults             -no-reboot             -display none             -monitor none             -qmp unix:build/qmp-complete.sock,server=on,wait=off             -serial file:build/qemu-serial-complete.log             -debugcon file:build/ovmf-debug-complete.log             -global isa-debugcon.iobase=0x402             -drive if=pflash,format=raw,readonly=on,file="$OVMF_CODE"             -drive if=pflash,format=raw,file=build/OVMF_VARS.complete.fd             -device qemu-xhci,id=xhci             -drive if=none,id=bootstick,format=raw,file=build/uefi-floppy.img,readonly=on             -device usb-storage,bus=xhci.0,drive=bootstick,bootindex=1             -device ich9-intel-hda,id=hda1             -audiodev wav,id=wav1,path=build/qemu-audio-complete.wav,out.frequency=48000,out.channels=2,out.format=s16             -device hda-output,bus=hda1.0,audiodev=wav1             >build/qemu-stdout-complete.log 2>build/qemu-stderr-complete.log &
+          qemu_pid=$!
+          cleanup() {
+            if kill -0 "$qemu_pid" 2>/dev/null; then
+              kill "$qemu_pid" 2>/dev/null || true
+              wait "$qemu_pid" 2>/dev/null || true
+            fi
+          }
+          trap cleanup EXIT
+
+          python navigation/uefi/qmp_navigation_smoke.py             --qmp build/qmp-complete.sock             --serial build/qemu-serial-complete.log             --report build/qemu-navigation-complete-report.json             --timeout 30             --wait-speech-complete             --speech-timeout 45             --delay 0.05             | tee build/qemu-navigation-complete-analysis.txt
+
+          for _ in $(seq 1 100); do
+            if ! kill -0 "$qemu_pid" 2>/dev/null; then break; fi
+            sleep 0.05
+          done
+          cleanup
+          trap - EXIT
+          echo QEMU_COMPLETE_SPEECH_BOOT=PASS
+
+      - name: Verify completed navigation PCM content
+        run: |
+          set -euo pipefail
+          grep -F 'NAVIGATION_COMPLETE_SPEECH_SCENARIO=PASS' build/qemu-navigation-complete-analysis.txt
+          grep -F 'QEMU_SPEECH_F1_COMPLETE=PASS' build/qemu-navigation-complete-analysis.txt
+          grep -F 'QEMU_SPEECH_DOWN_COMPLETE=PASS' build/qemu-navigation-complete-analysis.txt
+          grep -F 'QEMU_SPEECH_UP_COMPLETE=PASS' build/qemu-navigation-complete-analysis.txt
+          python navigation/uefi/analyze_wav_evidence.py build/qemu-audio-complete.wav build/qemu-audio-complete-report.json | tee build/qemu-audio-complete-analysis.txt
+          python navigation/uefi/verify_navigation_speech_pcm.py             build/qemu-audio-complete.wav             build/qemu-serial-complete.log             build/qemu-navigation-speech-content-report.json             | tee build/qemu-navigation-speech-content-analysis.txt
+          grep -F 'NAVIGATION_SPEECH_PCM_FORMAT=PASS' build/qemu-navigation-speech-content-analysis.txt
+          grep -F 'NAVIGATION_DISCOVERY_PREFIX=PASS' build/qemu-navigation-speech-content-analysis.txt
+          grep -F 'FULL_NAVIGATION_SPEECH_CONTENT=PASS' build/qemu-navigation-speech-content-analysis.txt
 
       - name: Summarize runtime evidence
         if: always()
@@ -158,8 +194,8 @@ jobs:
             if grep -qF 'NAVIGATION_INPUT=PASS' build/qemu-navigation-analysis.txt 2>/dev/null; then echo "- F1/Down/Up/Escape input: PASS"; else echo "- F1/Down/Up/Escape input: NOT_ESTABLISHED"; fi
             if grep -qF 'HII_GRAPH_NAV_SPEECH_INTERRUPT=PASS' build/qemu-serial.log 2>/dev/null; then echo "- Realtime speech interruption: PASS"; else echo "- Realtime speech interruption: NOT_ESTABLISHED"; fi
             if grep -qF 'DISCOVERY_SPEECH_CONTENT=PASS' build/qemu-speech-content-analysis.txt 2>/dev/null; then echo "- Discovery phrase PCM content: PASS (bit-identical)"; else echo "- Discovery phrase PCM content: NOT_ESTABLISHED"; fi
-            echo "- Full navigation speech content: NOT_ESTABLISHED"
-            echo "- Intelligibility: NOT_TESTED"
+            if grep -qF 'FULL_NAVIGATION_SPEECH_CONTENT=PASS' build/qemu-navigation-speech-content-analysis.txt 2>/dev/null; then echo "- Completed F1/Down/Up speech PCM content: PASS (bit-identical, ordered chunks)"; else echo "- Completed F1/Down/Up speech PCM content: NOT_ESTABLISHED"; fi
+            echo "- Human intelligibility: NOT_TESTED"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload QEMU runtime evidence
@@ -180,6 +216,17 @@ jobs:
             build/qemu-navigation-report.json
             build/qemu-speech-content-analysis.txt
             build/qemu-speech-content-report.json
+            build/qemu-serial-complete.log
+            build/ovmf-debug-complete.log
+            build/qemu-audio-complete.wav
+            build/qemu-audio-complete-report.json
+            build/qemu-audio-complete-analysis.txt
+            build/qemu-navigation-complete-analysis.txt
+            build/qemu-navigation-complete-report.json
+            build/qemu-navigation-speech-content-analysis.txt
+            build/qemu-navigation-speech-content-report.json
             build/qemu-stdout.log
             build/qemu-stderr.log
+            build/qemu-stdout-complete.log
+            build/qemu-stderr-complete.log
           if-no-files-found: warn
