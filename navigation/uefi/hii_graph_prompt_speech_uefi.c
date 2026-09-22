@@ -1636,7 +1636,8 @@ static int nav_stage_set(u8 prompt_index, u64 value) {
         return 0;
     }
     if (g_nav_prompt_opcodes[prompt_index] != 0x05u &&
-        g_nav_prompt_opcodes[prompt_index] != 0x06u) return 0;
+        g_nav_prompt_opcodes[prompt_index] != 0x06u &&
+        g_nav_prompt_opcodes[prompt_index] != 0x07u) return 0;
 
     nav_staged_value *e = nav_stage_find(
         g_nav_prompt_handle_indices[prompt_index],
@@ -3386,6 +3387,17 @@ static int wait_navigation_keys(void *system_table) {
         key.unicode_char = 0;
         u64 st = conin->read_key(conin, &key);
         if (st == 0) {
+            /*
+             * Preempt the current utterance as soon as firmware reports a key.
+             * Do this before HII refresh/value formatting so rapid blind
+             * navigation never waits on semantic work before audio stops.
+             */
+            if (g_speech_active || g_speech_phrase_active) {
+                speech_phrase_cancel();
+                if (g_nav_speech_interruptions != 0xffu) ++g_nav_speech_interruptions;
+                marker("HII_GRAPH_NAV_SPEECH_INTERRUPT=PASS");
+                marker("HII_GRAPH_NAV_SPEECH_INTERRUPT_EARLY=PASS");
+            }
             u8 speak = 0;
             u8 speak_help = 0;
             const char *speech_override = 0;
