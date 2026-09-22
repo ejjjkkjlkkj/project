@@ -67,6 +67,7 @@ for marker in (
     "HII_GRAPH_NAV_FORM_BACK=PASS",
     "HII_GRAPH_NAV_FORM_TITLE_SPEECH=PASS",
     "HII_GRAPH_NAV_READ_ONLY_ACTION=BLOCKED",
+    "HII_GRAPH_NAV_SELF_REF_ACTION=BLOCKED",
 ):
     assert marker in source, marker
 
