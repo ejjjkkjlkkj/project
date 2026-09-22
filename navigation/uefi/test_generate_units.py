@@ -3,7 +3,8 @@ from __future__ import annotations
 
 from generate_units import (
     DIGIT_UNITS, LETTER_UNITS, WORD_NAME_STRIDE, WORD_UNIT_STRIDE,
-    WORD_UNITS, SOURCE_RATE, convert, load_source, make_source_units,
+    WORD_UNITS, PHRASE_TEXTS, SOURCE_RATE, convert, load_source, make_source_units,
+    _phrase_unit_name,
 )
 
 MAX_BANK_BYTES = 128 * 4096 - 0x1000
@@ -20,6 +21,7 @@ def main() -> None:
         | {unit for seq in LETTER_UNITS.values() for unit in seq}
         | {unit for seq in DIGIT_UNITS.values() for unit in seq}
         | {unit for seq in WORD_UNITS.values() for unit in seq}
+        | {_phrase_unit_name(i) for i in range(len(PHRASE_TEXTS))}
     )
     missing = sorted(required - set(source_units))
     assert not missing, f"missing native speech units: {missing}"
@@ -34,6 +36,10 @@ def main() -> None:
     assert max(map(len, WORD_UNITS)) < WORD_NAME_STRIDE
     assert max(map(len, WORD_UNITS.values())) <= WORD_UNIT_STRIDE
     assert all(word.isascii() and word.islower() for word in WORD_UNITS)
+    assert len(PHRASE_TEXTS) >= 6
+    assert "ready press f1 for help" in PHRASE_TEXTS
+    assert "no change" in PHRASE_TEXTS
+    assert all(0 < len(phrase) <= 32 and phrase.isascii() for phrase in PHRASE_TEXTS)
 
     converted = {name: convert(source_units[name], SOURCE_RATE) for name in sorted(required)}
     assert all(data for data in converted.values())
@@ -48,6 +54,7 @@ def main() -> None:
     print(f"unit-count={len(converted)}")
     print(f"bank-bytes={bank_bytes}")
     print(f"word-lexicon-count={len(WORD_UNITS)}")
+    print(f"phrase-clip-count={len(PHRASE_TEXTS)}")
     print("VOICE_NAVIGATION_CONTRACT=PASS")
 
 
