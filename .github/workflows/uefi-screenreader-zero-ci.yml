@@ -44,6 +44,14 @@ jobs:
           ./sr-hii-selftest | tee hii-proof.txt
           grep -F 'UEFI_HII_IFR_MODEL=PASS' hii-proof.txt
 
+      - name: Validate quality voice bank packer
+        working-directory: screenreader/uefi
+        run: |
+          set -euo pipefail
+          python -m py_compile pack_voice_bank.py test_pack_voice_bank.py
+          python test_pack_voice_bank.py | tee voice-packer-proof.txt
+          grep -F 'UEFI_QUALITY_VOICE_PACKER_TEST=PASS' voice-packer-proof.txt
+
       - name: Freestanding x64 compile
         working-directory: screenreader/uefi
         run: |
