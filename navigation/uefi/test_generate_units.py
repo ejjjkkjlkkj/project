@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
-from generate_units import DIGIT_UNITS, LETTER_UNITS, convert, load_source
+from generate_units import (
+    DIGIT_UNITS, LETTER_UNITS, WORD_NAME_STRIDE, WORD_UNIT_STRIDE,
+    WORD_UNITS, convert, load_source,
+)
 
 MAX_BANK_BYTES = 128 * 4096 - 0x1000
 
@@ -16,6 +19,7 @@ def main() -> None:
         {"sil"}
         | {unit for seq in LETTER_UNITS.values() for unit in seq}
         | {unit for seq in DIGIT_UNITS.values() for unit in seq}
+        | {unit for seq in WORD_UNITS.values() for unit in seq}
     )
     missing = sorted(required - set(source_units))
     assert not missing, f"missing native speech units: {missing}"
@@ -24,6 +28,12 @@ def main() -> None:
     assert set(DIGIT_UNITS) == set("0123456789")
     assert max(map(len, LETTER_UNITS.values())) <= 8
     assert max(map(len, DIGIT_UNITS.values())) <= 8
+    assert len(WORD_UNITS) >= 35
+    assert {"boot","security","configuration","password","network","save","exit"} <= set(WORD_UNITS)
+    assert len(WORD_UNITS) == len(set(WORD_UNITS))
+    assert max(map(len, WORD_UNITS)) < WORD_NAME_STRIDE
+    assert max(map(len, WORD_UNITS.values())) <= WORD_UNIT_STRIDE
+    assert all(word.isascii() and word.islower() for word in WORD_UNITS)
 
     converted = {name: convert(source_units[name], speech.SAMPLE_RATE) for name in sorted(required)}
     assert all(data for data in converted.values())
@@ -37,6 +47,7 @@ def main() -> None:
     print(f"source-rate={speech.SAMPLE_RATE}")
     print(f"unit-count={len(converted)}")
     print(f"bank-bytes={bank_bytes}")
+    print(f"word-lexicon-count={len(WORD_UNITS)}")
     print("VOICE_NAVIGATION_CONTRACT=PASS")
 
 
