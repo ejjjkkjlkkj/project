@@ -138,6 +138,13 @@ jobs:
           set -euo pipefail
           python navigation/uefi/analyze_wav_evidence.py build/qemu-audio.wav build/qemu-audio-report.json | tee build/qemu-audio-analysis.txt
 
+      - name: Verify deterministic discovery speech content
+        run: |
+          set -euo pipefail
+          python navigation/uefi/verify_speech_pcm.py build/qemu-audio.wav build/qemu-speech-content-report.json | tee build/qemu-speech-content-analysis.txt
+          grep -F 'DISCOVERY_SPEECH_CONTENT=PASS' build/qemu-speech-content-analysis.txt
+          grep -F 'DISCOVERY_SPEECH_PCM_EXACT=PASS' build/qemu-speech-content-analysis.txt
+
       - name: Summarize runtime evidence
         if: always()
         run: |
@@ -150,7 +157,8 @@ jobs:
             if grep -qF 'AUDIO_STREAM=PASS' build/qemu-audio-analysis.txt 2>/dev/null; then echo "- Captured PCM signal: PASS"; else echo "- Captured PCM signal: NOT_ESTABLISHED"; fi
             if grep -qF 'NAVIGATION_INPUT=PASS' build/qemu-navigation-analysis.txt 2>/dev/null; then echo "- F1/Down/Up/Escape input: PASS"; else echo "- F1/Down/Up/Escape input: NOT_ESTABLISHED"; fi
             if grep -qF 'HII_GRAPH_NAV_SPEECH_INTERRUPT=PASS' build/qemu-serial.log 2>/dev/null; then echo "- Realtime speech interruption: PASS"; else echo "- Realtime speech interruption: NOT_ESTABLISHED"; fi
-            echo "- Speech content recognition: NOT_ESTABLISHED"
+            if grep -qF 'DISCOVERY_SPEECH_CONTENT=PASS' build/qemu-speech-content-analysis.txt 2>/dev/null; then echo "- Discovery phrase PCM content: PASS (bit-identical)"; else echo "- Discovery phrase PCM content: NOT_ESTABLISHED"; fi
+            echo "- Full navigation speech content: NOT_ESTABLISHED"
             echo "- Intelligibility: NOT_TESTED"
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -170,6 +178,8 @@ jobs:
             build/qemu-audio-analysis.txt
             build/qemu-navigation-analysis.txt
             build/qemu-navigation-report.json
+            build/qemu-speech-content-analysis.txt
+            build/qemu-speech-content-report.json
             build/qemu-stdout.log
             build/qemu-stderr.log
           if-no-files-found: warn
