@@ -44,6 +44,14 @@ jobs:
           ./sr-hii-selftest | tee hii-proof.txt
           grep -F 'UEFI_HII_IFR_MODEL=PASS' hii-proof.txt
 
+      - name: Host item chooser self-test
+        working-directory: screenreader/uefi
+        run: |
+          set -euo pipefail
+          cc -std=c11 -O2 -Wall -Wextra -Werror             sr_core.c sr_keymap.c sr_chooser.c sr_chooser_selftest.c             -o sr-chooser-selftest
+          ./sr-chooser-selftest | tee chooser-proof.txt
+          grep -F 'UEFI_ITEM_CHOOSER=PASS' chooser-proof.txt
+
       - name: Host native UEFI HII collector self-test
         working-directory: screenreader/uefi
         run: |
@@ -71,12 +79,14 @@ jobs:
           clang $flags -c sr_hii_ifr.c -o sr_hii_ifr.obj
           clang $flags -c sr_uefi_hii.c -o sr_uefi_hii.obj
           clang $flags -c sr_uefi_input.c -o sr_uefi_input.obj
+          clang $flags -c sr_chooser.c -o sr_chooser.obj
           clang $flags -c sr_uefi_runtime.c -o sr_uefi_runtime.obj
           test -s sr_core.obj
           test -s sr_voice_stream.obj
           test -s sr_hii_ifr.obj
           test -s sr_uefi_hii.obj
           test -s sr_uefi_input.obj
+          test -s sr_chooser.obj
           test -s sr_uefi_runtime.obj
           echo UEFI_FREESTANDING_OBJECTS=PASS
 
