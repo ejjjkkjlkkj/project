@@ -51,6 +51,27 @@ required = (
     'HII_GRAPH_NAV_POSITION_KEY=PASS',
     'HII_GRAPH_NAV_POSITION_SPEECH=PASS',
     'HII_GRAPH_NAV_STAGED_EDIT_MODE=PASS',
+    'HII_GRAPH_NAV_STAGED_NUMERIC_MODE=PASS',
+    'HII_GRAPH_NAV_STAGED_NUMERIC=PASS',
+    'HII_GRAPH_NAV_SPECIALIZED_METADATA=PASS',
+    'HII_GRAPH_NAV_PASSWORD_PRIVACY=PASS',
+    'HII_GRAPH_NAV_PASSWORD_REDACTION=PASS',
+    'HII_GRAPH_NAV_STAGED_CONDITION_EVAL=PASS',
+    'HII_GRAPH_NAV_STAGED_CONDITION_VALUE=PASS',
+    'HII_GRAPH_NAV_STAGED_DEPENDENCY_REFRESH=PASS',
+    'HII_GRAPH_NAV_CONTROL_DETAILS=PASS',
+    'nav_prompt_metadata_set',
+    'nav_build_control_detail_speech',
+    'nav_stage_adjust_numeric',
+    'g_nav_prompt_min_value',
+    'g_nav_prompt_max_value',
+    'g_nav_prompt_step_value',
+    'g_nav_prompt_min_size',
+    'g_nav_prompt_max_size',
+    'g_nav_prompt_max_containers',
+    "key.unicode_char == (u16)'l'",
+    "key.unicode_char == (u16)'+'",
+    "key.unicode_char == (u16)'-'",
     'HII_GRAPH_NAV_STAGED_EDIT=PASS',
     'HII_GRAPH_NAV_STAGED_ONEOF=PASS',
     'HII_GRAPH_NAV_STAGED_CHECKBOX=PASS',
@@ -193,5 +214,22 @@ assert "TAB" not in mask
 # accidentally taking ownership of the preserved boot payload.
 assert "BOOTX64.EFI" not in text
 assert "KERNEL.BIN" not in text
+
+
+
+# Password fields must be redacted before any VarStore scalar read attempt.
+ev_start = text.index("static int nav_effective_value_text")
+ev_end = text.index("static int nav_stage_cycle_oneof", ev_start)
+ev = text[ev_start:ev_end]
+assert 'op == 0x08u' in ev
+assert '"protected"' in ev
+assert ev.index('op == 0x08u') < ev.index('nav_effective_scalar_value')
+
+# Preview values must participate in IFR conditional evaluation before live storage.
+rq_start = text.index("static int nav_read_question_value")
+rq_end = text.index("static int nav_eval_condition_expression", rq_start)
+rq = text[rq_start:rq_end]
+assert "nav_stage_find" in rq and "nav_find_question" in rq
+assert rq.index("nav_stage_find") < rq.index("nav_find_question")
 
 print("SCREEN_READER_NAVIGATION_SOURCE_CONTRACT=PASS")
