@@ -277,11 +277,11 @@ static char g_nav_help_text[QEV_NAV_TEXT_MAX + 1u];
 static u8 g_nav_help_length;
 static char g_nav_value_text[33];
 static u8 g_nav_value_length;
-static char g_nav_focus_speech[33];
+static char g_nav_focus_speech[QEV_NAV_TEXT_MAX + 1u];
 static u8 g_nav_focus_speech_length;
 static char g_nav_position_text[33];
 static u8 g_nav_position_length;
-static char g_nav_where_text[33];
+static char g_nav_where_text[QEV_NAV_TEXT_MAX + 1u];
 static u8 g_nav_where_length;
 static char g_nav_edit_status_text[33];
 static u8 g_nav_edit_status_length;
@@ -1573,10 +1573,18 @@ static int nav_live_value_text(void *system_table, u8 prompt_index,
     if (!text_out || !length_out || prompt_index >= g_nav_prompt_total) return 0;
     if (checkbox_state_out) *checkbox_state_out = 0u;
 
+    u8 op = g_nav_prompt_opcodes[prompt_index];
+    if (op == 0x08u) {
+        *text_out = "protected";
+        *length_out = 9u;
+        marker("HII_GRAPH_NAV_LIVE_PASSWORD_REDACTION=PASS");
+        return 1;
+    }
+
     u64 live_value = 0u;
     if (!nav_read_scalar_value(system_table, prompt_index, &live_value)) return 0;
 
-    if (g_nav_prompt_opcodes[prompt_index] == 0x06u) {
+    if (op == 0x06u) {
         if (live_value) {
             *text_out = "checked";
             *length_out = 7u;
@@ -1942,8 +1950,8 @@ static int nav_build_where_am_i_speech(void *system_table, u8 prompt_index,
                                               &staged);
     if (!have_value) value_length = 0u;
     u8 suffix_budget = value_length ? (u8)(value_length + 1u) : 0u;
-    if (suffix_budget > 20u) suffix_budget = 20u;
-    u8 prefix_budget = (u8)(32u - suffix_budget);
+    if (suffix_budget > 32u) suffix_budget = 32u;
+    u8 prefix_budget = (u8)(QEV_NAV_TEXT_MAX - suffix_budget);
     u8 n = 0u;
 
     for (u8 i = 0u; i < g_nav_form_title_length && n < prefix_budget; ++i)
@@ -1953,12 +1961,13 @@ static int nav_build_where_am_i_speech(void *system_table, u8 prompt_index,
         out[n++] = g_nav_prompts[prompt_index][i];
 
     if (value_length && value_text) {
-        if (n && n < 32u) out[n++] = ' ';
-        for (u8 i = 0u; i < value_length && n < 32u; ++i)
+        if (n && n < QEV_NAV_TEXT_MAX) out[n++] = ' ';
+        for (u8 i = 0u; i < value_length && n < QEV_NAV_TEXT_MAX; ++i)
             out[n++] = value_text[i];
     }
     out[n] = 0;
     *length_out = n;
+    marker("HII_GRAPH_NAV_WHERE_AM_I_64=PASS");
     return n != 0u;
 }
 
@@ -1967,60 +1976,58 @@ static int nav_build_focus_speech(void *system_table, u8 prompt_index,
     if (!system_table || !out || !length_out ||
         prompt_index >= g_nav_prompt_total) return 0;
 
+    u8 op = g_nav_prompt_opcodes[prompt_index];
+    u8 speak_value = op != 0x08u;
     const char *value_text = 0;
     u8 value_length = 0u;
     u8 staged = 0u;
-    if (!nav_effective_value_text(system_table, prompt_index,
-                                  &value_text, &value_length,
-                                  &staged) ||
-        !value_text || !value_length)
-        return 0;
+    int have_value = 0;
 
-    u8 op = g_nav_prompt_opcodes[prompt_index];
-    u8 speak_value = op != 0x08u;
-    if (speak_value && value_length >= 32u) {
-        for (u8 i = 0u; i < 32u; ++i) out[i] = value_text[i];
-        out[32] = 0;
-        *length_out = 32u;
-        return 1;
+    /*
+     * Password focus must never trigger a value read. Other controls may have
+     * no value at all (buttons, references, subtitles); they still need a
+     * complete semantic focus announcement for blind operation.
+     */
+    if (speak_value) {
+        have_value = nav_effective_value_text(system_table, prompt_index,
+                                              &value_text, &value_length,
+                                              &staged);
+        if (!have_value) {
+            value_text = 0;
+            value_length = 0u;
+            staged = 0u;
+        }
+    } else {
+        marker("HII_GRAPH_NAV_PASSWORD_VALUE_READ_AVOIDED=PASS");
     }
 
     qev_semantic_node node;
     node.role = nav_semantic_role_for_opcode(op);
     node.native_role = ifr_semantic_role(op);
-    node.label = 0;
-    node.value = 0;
+    node.label = g_nav_prompt_lengths[prompt_index] ?
+                 g_nav_prompts[prompt_index] : 0;
+    node.value = (have_value && value_text && value_length) ? value_text : 0;
     node.states = nav_semantic_state_bits(prompt_index, staged);
 
     qev_utterance semantic;
     if (!qev_semantic_focus_utterance(&node, &semantic)) return 0;
     marker("HII_GRAPH_NAV_SEMANTIC_CORE=PASS");
+    marker("HII_GRAPH_NAV_VALUE_OPTIONAL_SPEECH=PASS");
 
     /*
-     * The current HDA phrase path schedules speech in <=32-character chunks.
-     * Preserve the live value at the end and truncate role/state/label first.
-     * Password values are never appended: the semantic prefix says protected.
+     * The phrase queue accepts 64 characters and splits them into <=32-char
+     * DMA chunks. Keep role/state/label context first, followed by the value.
      */
-    u8 tail = speak_value ? value_length : 0u;
-    u8 separator = tail ? 1u : 0u;
-    u8 budget = (u8)(32u - tail - separator);
     u8 n = 0u;
-
-    for (u8 i = 0u; semantic.text[i] && n < budget; ++i)
-        out[n++] = semantic.text[i];
-
-    if (n < budget && g_nav_prompt_lengths[prompt_index]) out[n++] = ' ';
-    for (u8 i = 0u; i < g_nav_prompt_lengths[prompt_index] && n < budget; ++i)
-        out[n++] = g_nav_prompts[prompt_index][i];
-
-    if (tail && n < 32u) out[n++] = ' ';
-    if (speak_value) {
-        for (u8 i = 0u; i < value_length && n < 32u; ++i)
-            out[n++] = value_text[i];
+    while (semantic.text[n] && n < QEV_NAV_TEXT_MAX) {
+        out[n] = semantic.text[n];
+        ++n;
     }
-
     out[n] = 0;
     *length_out = n;
+
+    if (semantic.text[n] || semantic.truncated)
+        marker("HII_GRAPH_NAV_SEMANTIC_TRUNCATION=PASS");
     return n != 0u;
 }
 
