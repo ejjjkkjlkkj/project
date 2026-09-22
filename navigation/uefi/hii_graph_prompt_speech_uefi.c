@@ -1217,12 +1217,206 @@ static int get_hii_string(hii_string_protocol *str, void *handle, u16 token, cha
 }
 
 #ifdef QEV_INTERACTIVE_NAV
+static void nav_guid_from_bytes(const u8 *p, efi_guid *g) {
+    if (!p || !g) return;
+    g->data1 = rd32(p);
+    g->data2 = rd16(p + 4);
+    g->data3 = rd16(p + 6);
+    for (u32 i = 0; i < 8u; ++i) g->data4[i] = p[8u + i];
+}
+
+static void nav_collect_varstores(void) {
+    g_nav_varstore_count = 0u;
+    g_nav_cached_varstore_valid = 0u;
+    g_nav_cached_varstore_id = 0xffffu;
+
+    u32 list_len = rd32(g_hii_package + 16);
+    if (list_len < 24u || list_len > sizeof(g_hii_package)) return;
+    const u8 *p = g_hii_package + 20;
+    const u8 *list_end = g_hii_package + list_len;
+    while (p + 4u <= list_end) {
+        u32 hdr = rd32(p);
+        u32 len = hdr & 0x00ffffffu;
+        u8 type = (u8)(hdr >> 24);
+        if (len < 4u || p + len > list_end) return;
+        if (type == 0xdfu) break;
+        if (type == 0x02u) {
+            const u8 *q = p + 4;
+            const u8 *end = p + len;
+            while (q + 2u <= end) {
+                u8 op = q[0];
+                u32 oplen = (u32)(q[1] & 0x7fu);
+                if (oplen < 2u || q + oplen > end) break;
+
+                /* EFI_IFR_VARSTORE: Header + Guid + VarStoreId + Size + Name. */
+                if (op == 0x24u && oplen >= 23u &&
+                    g_nav_varstore_count < MAX_HII_VARSTORES) {
+                    u16 id = rd16(q + 18);
+                    u16 size = rd16(q + 20);
+                    if (id && size) {
+                        nav_varstore_info *vs = &g_nav_varstores[g_nav_varstore_count];
+                        vs->id = id;
+                        vs->size = size;
+                        nav_guid_from_bytes(q + 2, &vs->guid);
+                        u32 n = 0;
+                        for (u32 i = 22u; i < oplen && q[i] && n < 31u; ++i)
+                            vs->name[n++] = (char)q[i];
+                        vs->name[n] = 0;
+                        if (n) ++g_nav_varstore_count;
+                    }
+                }
+                q += oplen;
+            }
+        }
+        p += len;
+    }
+    if (g_nav_varstore_count)
+        marker("HII_GRAPH_NAV_VARSTORE_PARSE=PASS");
+}
+
+static nav_varstore_info *nav_find_varstore(u16 id) {
+    for (u8 i = 0; i < g_nav_varstore_count; ++i)
+        if (g_nav_varstores[i].id == id) return &g_nav_varstores[i];
+    return 0;
+}
+
+static int nav_load_varstore(u16 id) {
+    if (g_nav_cached_varstore_valid && g_nav_cached_varstore_id == id) return 1;
+    if (!g_nav_get_variable) return 0;
+    nav_varstore_info *vs = nav_find_varstore(id);
+    if (!vs || !vs->name[0] || vs->size > sizeof(g_nav_varstore_data)) return 0;
+
+    u16 name[33];
+    u32 n = 0;
+    while (vs->name[n] && n < 31u) {
+        name[n] = (u16)(u8)vs->name[n];
+        ++n;
+    }
+    name[n] = 0;
+
+    usize bytes = sizeof(g_nav_varstore_data);
+    u32 attributes = 0;
+    if (g_nav_get_variable(name, &vs->guid, &attributes, &bytes,
+                           g_nav_varstore_data) != 0)
+        return 0;
+    if (bytes < vs->size) return 0;
+
+    g_nav_cached_varstore_id = id;
+    g_nav_cached_varstore_size = bytes;
+    g_nav_cached_varstore_valid = 1u;
+    marker("HII_GRAPH_NAV_VALUE_READ=PASS");
+    return 1;
+}
+
+static int nav_read_scalar(u16 varstore_id, u16 offset, u8 width, u64 *value_out) {
+    if (!value_out || (width != 1u && width != 2u && width != 4u && width != 8u))
+        return 0;
+    if (!nav_load_varstore(varstore_id)) return 0;
+    if ((usize)offset + width > g_nav_cached_varstore_size) return 0;
+
+    u64 value = 0;
+    for (u8 i = 0; i < width; ++i)
+        value |= ((u64)g_nav_varstore_data[(usize)offset + i]) << (8u * i);
+    *value_out = value;
+    return 1;
+}
+
+static u8 nav_ifr_type_width(u8 type) {
+    switch (type) {
+        case 0x00u: return 1u;
+        case 0x01u: return 2u;
+        case 0x02u: return 4u;
+        case 0x03u: return 8u;
+        default: return 0u;
+    }
+}
+
+static u64 nav_read_le(const u8 *p, u8 width) {
+    u64 value = 0;
+    for (u8 i = 0; i < width; ++i) value |= ((u64)p[i]) << (8u * i);
+    return value;
+}
+
+static int nav_copy_ascii(const char *src, char *out, u32 *count_out) {
+    if (!src || !out || !count_out) return 0;
+    u32 n = 0;
+    while (src[n] && n < 32u) {
+        out[n] = src[n];
+        ++n;
+    }
+    out[n] = 0;
+    *count_out = n;
+    return n != 0;
+}
+
+static int nav_one_of_value(const u8 *q, u32 oplen, const u8 *end,
+                            u16 varstore_id, u16 var_info,
+                            char *out, u32 *count_out) {
+    if (!q || !end || !out || !count_out || !(q[1] & 0x80u)) return 0;
+    const u8 *r = q + oplen;
+    u32 depth = 1u;
+    while (r + 2u <= end && depth) {
+        u8 op = r[0];
+        u32 len = (u32)(r[1] & 0x7fu);
+        u8 scoped = (u8)(r[1] & 0x80u);
+        if (len < 2u || r + len > end) return 0;
+
+        if (op == 0x29u) {
+            --depth;
+            r += len;
+            continue;
+        }
+
+        if (depth == 1u && op == 0x09u && len >= 7u) {
+            u8 type = r[5];
+            u8 width = nav_ifr_type_width(type);
+            if (width && 6u + width <= len) {
+                u64 current = 0;
+                if (nav_read_scalar(varstore_id, var_info, width, &current) &&
+                    current == nav_read_le(r + 6, width)) {
+                    u16 option_token = rd16(r + 2);
+                    if (option_token &&
+                        get_hii_string(g_nav_hii_string, g_nav_hii_handle,
+                                       option_token, out, count_out))
+                        return 1;
+                }
+            }
+        }
+        if (scoped) ++depth;
+        r += len;
+    }
+    return 0;
+}
+
+static int nav_control_value(u8 op, const u8 *q, u32 oplen, const u8 *end,
+                             char *out, u32 *count_out) {
+    if (!q || !out || !count_out || oplen < 13u) return 0;
+    *count_out = 0;
+    if (!ifr_question_opcode(op)) return 0;
+
+    u16 varstore_id = rd16(q + 8);
+    u16 var_info = rd16(q + 10);
+    if (!varstore_id) return 0;
+
+    if (op == 0x05u)
+        return nav_one_of_value(q, oplen, end, varstore_id, var_info,
+                                out, count_out);
+
+    if (op == 0x06u) {
+        u64 value = 0;
+        if (!nav_read_scalar(varstore_id, var_info, 1u, &value)) return 0;
+        return nav_copy_ascii(value ? "checked" : "not checked", out, count_out);
+    }
+    return 0;
+}
+
 static int nav_prompt_add(u8 opcode, u16 form_id, u16 question_id,
                           const char *text, u32 count,
                           const char *help, u32 help_count,
                           const char *value, u32 value_count,
                           u16 ref_form_id) {
-    if (!text || !count || count > 32u || help_count > 32u || value_count > 32u)
+    if (!text || !count || count > 32u || help_count > 32u || value_count > 32u ||
+        (value_count && !value))
         return 0;
     for (u8 i = 0; i < g_nav_prompt_total; ++i) {
         if (g_nav_prompt_lengths[i] != (u8)count ||
@@ -1397,6 +1591,8 @@ static int nav_load_form(u16 requested_form_id) {
     g_nav_prompt_index = 0;
     g_nav_prompt_overflow = 0;
     g_nav_help_available = 0;
+    g_nav_cached_varstore_valid = 0u;
+    g_nav_cached_varstore_id = 0xffffu;
     g_nav_form_title[0] = 0;
     g_nav_form_title_length = 0;
 
@@ -1455,6 +1651,10 @@ static int nav_load_form(u16 requested_form_id) {
                     if (help_token)
                         (void)get_hii_string(g_nav_hii_string, g_nav_hii_handle,
                                              help_token, help_candidate, &help_count);
+                    char value_candidate[33];
+                    u32 value_count = 0;
+                    (void)nav_control_value(op, q, oplen, end,
+                                            value_candidate, &value_count);
                     int have_prompt =
                         token && get_hii_string(g_nav_hii_string, g_nav_hii_handle,
                                                 token, candidate, &candidate_count);
@@ -1468,7 +1668,8 @@ static int nav_load_form(u16 requested_form_id) {
                         (void)nav_prompt_add(op, selected_form_id, question_id,
                                              candidate, candidate_count,
                                              help_candidate, help_count,
-                                             ref_form_id);
+                                             value_count ? value_candidate : 0,
+                                             value_count, ref_form_id);
                 }
                 q += oplen;
             }
@@ -1546,6 +1747,7 @@ static int resolve_hii_prompt(void *system_table) {
         g_nav_hii_handle = handle;
         g_nav_m1603qa_308_profile = 1u;
         g_nav_form_history_depth = 0u;
+        nav_collect_varstores();
         if (!nav_load_form(0x2710u)) {
             g_nav_m1603qa_308_profile = 0u;
             continue;
@@ -1580,6 +1782,7 @@ static int resolve_hii_prompt(void *system_table) {
         g_nav_hii_string = str;
         g_nav_hii_handle = handle;
         g_nav_form_history_depth = 0u;
+        nav_collect_varstores();
         if (!nav_load_form(0u)) continue;
         marker("HII_GRAPH_NAV_SETUP_FORMSET=PASS");
         marker("HII_GRAPH_NAV_GENERIC_FORM_BROWSER=PASS");
@@ -1646,6 +1849,7 @@ static int resolve_hii_prompt(void *system_table) {
                             nav_prompt_add(op, current_form_id, question_id,
                                            candidate, candidate_count,
                                            help_candidate, help_count,
+                                           0, 0,
                                            (op == 0x0fu && oplen >= 15u) ? rd16(q + 13) : 0u);
                         }
 #else
@@ -2238,6 +2442,13 @@ __attribute__((ms_abi)) u64 efi_main(void *image_handle, void *system_table) {
         g_allocate_pages = *(allocate_pages_fn *)((u8 *)boot_services + 0x28);
         g_stall = *(stall_fn *)((u8 *)boot_services + 0xf8);
     }
+#ifdef QEV_INTERACTIVE_NAV
+    void *runtime_services = *(void **)((u8 *)system_table + 0x58);
+    if (runtime_services)
+        g_nav_get_variable = *(get_variable_fn *)((u8 *)runtime_services + 0x48);
+    marker(g_nav_get_variable ? "HII_GRAPH_NAV_GET_VARIABLE=PASS"
+                              : "HII_GRAPH_NAV_GET_VARIABLE=NOT_AVAILABLE");
+#endif
     if (!resolve_hii_prompt(system_table)) {
         marker("STATUS=BLOCKED");
         marker("REASON=HII_PROMPT_NOT_RESOLVED");
