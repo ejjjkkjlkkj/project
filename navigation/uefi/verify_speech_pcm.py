@@ -66,8 +66,8 @@ def expand_pcm8_16k(src: bytes) -> bytes:
 
 
 def render_runtime_pcm(text: str) -> bytes:
-    if not text or len(text) > 32:
-        raise ValueError("runtime speech text must be 1..32 characters")
+    if not text or len(text) > 64:
+        raise ValueError("runtime speech text must be 1..64 characters")
 
     units = converted_units()
     pcm = bytearray(LEAD_SILENCE_BYTES)
