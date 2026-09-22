@@ -298,13 +298,28 @@ int sr_move(sr_runtime *rt, int delta) {
 int sr_move_page(sr_runtime *rt, int direction) {
     sr_u32 moved = 0;
     sr_u32 target;
-    if (!rt || !direction) return 0;
+    sr_u32 index;
+    if (!rt || !rt->node_count || !direction) return 0;
     target = rt->page_step ? rt->page_step : 5u;
-    while (moved < target) {
-        if (!sr_move(rt, direction > 0 ? 1 : -1)) break;
-        ++moved;
+
+    if (!rt->has_focus)
+        return direction > 0 ? sr_focus_first(rt) : sr_focus_last(rt);
+
+    index = rt->focus_index;
+    if (direction > 0) {
+        while (index + 1u < rt->node_count && moved < target) {
+            ++index;
+            if (sr_is_focusable(&rt->nodes[index])) ++moved;
+        }
+    } else {
+        while (index > 0u && moved < target) {
+            --index;
+            if (sr_is_focusable(&rt->nodes[index])) ++moved;
+        }
     }
-    return moved != 0;
+
+    if (!moved || index == rt->focus_index) return 0;
+    return sr_set_focus(rt, index, 1);
 }
 
 int sr_move_role(sr_runtime *rt, sr_role role, int direction) {
