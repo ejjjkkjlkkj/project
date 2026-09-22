@@ -123,6 +123,7 @@ int sr_announce_focus(sr_runtime *rt);
 int sr_repeat(sr_runtime *rt);
 int sr_help(sr_runtime *rt);
 int sr_where_am_i(sr_runtime *rt);
+int sr_say(sr_runtime *rt, const char *text, sr_speech_priority priority);
 void sr_stop_speech(sr_runtime *rt);
 
 const sr_node *sr_current(const sr_runtime *rt);
