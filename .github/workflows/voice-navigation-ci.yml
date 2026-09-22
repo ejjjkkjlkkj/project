@@ -43,6 +43,7 @@ jobs:
           grep -F 'source=voice/uefi_units/build_native_units.py' build/navigation_units.txt
           grep -F 'speech-mode=clear-lettername-spelling-fr-v3' build/navigation_units.txt
           grep -F 'letter-map=a-z-french-letter-names' build/navigation_units.txt
+          grep -F 'digit-map=0-9-french-number-names' build/navigation_units.txt
 
       - name: Compile UEFI navigation engine
         run: |
@@ -65,6 +66,15 @@ jobs:
           grep -aF 'HII_GRAPH_NAV_FORM_KEYS=PASS' build/NAVIGATION.EFI
           grep -aF 'HII_GRAPH_NAV_FORM_ID_TRACKING=PASS' build/NAVIGATION.EFI
           grep -aF 'HII_GRAPH_NAV_QUESTION_ID_TRACKING=PASS' build/NAVIGATION.EFI
+          grep -aF 'HII_GRAPH_NAV_VARSTORE_METADATA=PASS' build/NAVIGATION.EFI
+          grep -aF 'HII_GRAPH_NAV_CONDITION_TRACKING=PASS' build/NAVIGATION.EFI
+          grep -aF 'HII_GRAPH_NAV_FORM_ID=0x' build/NAVIGATION.EFI
+          grep -aF 'HII_GRAPH_NAV_QUESTION_ID=0x' build/NAVIGATION.EFI
+          grep -aF 'HII_GRAPH_NAV_VARSTORE_ID=0x' build/NAVIGATION.EFI
+          grep -aF 'HII_GRAPH_NAV_VAR_INFO=0x' build/NAVIGATION.EFI
+          grep -aF 'HII_GRAPH_NAV_QUESTION_FLAGS=0x' build/NAVIGATION.EFI
+          grep -aF 'HII_GRAPH_NAV_CONDITION_FLAGS=0x' build/NAVIGATION.EFI
+          grep -aF 'HII_GRAPH_SPEECH_DIGITS=PASS' build/NAVIGATION.EFI
           grep -aF 'HII_GRAPH_NAV_WHERE_AM_I_KEY=PASS' build/NAVIGATION.EFI
           echo VOICE_NAVIGATION_BUILD=PASS
 
