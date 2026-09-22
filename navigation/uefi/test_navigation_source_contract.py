@@ -8,6 +8,20 @@ text = SRC.read_text(encoding="utf-8")
 
 required = (
     'HII_GRAPH_NAV_REALTIME_MODE=INTERRUPTIBLE_DMA',
+    'HII_GRAPH_SPEECH_QUEUE=INTERRUPTIBLE_64',
+    'HII_GRAPH_SPEECH_WORD_BOUNDARY_CHUNKING=PASS',
+    'HII_GRAPH_SPEECH_MULTI_CHUNK=PASS',
+    'HII_GRAPH_SPEECH_CHUNK_START=PASS',
+    'HII_GRAPH_SPEECH_CHUNK_CONTINUE=PASS',
+    'HII_GRAPH_SPEECH_PHRASE_COMPLETE=PASS',
+    'QEV_NAV_TEXT_MAX 64u',
+    'QEV_SPEECH_CHUNK_MAX 32u',
+    'speech_phrase_begin',
+    'speech_phrase_poll',
+    'speech_phrase_cancel',
+    'speech_phrase_start_next',
+    'g_speech_phrase',
+    'g_speech_chunk',
     'HII_GRAPH_NAV_DIRECTIONAL_ALIASES=PASS',
     'HII_GRAPH_NAV_TAB_FORWARD=PASS',
     'HII_GRAPH_NAV_CONTEXT_HELP=PASS',
@@ -250,5 +264,31 @@ ss_end = text.index("static void nav_stage_clear_all", ss_start)
 ss = text[ss_start:ss_end]
 assert "NAV_Q_READ_ONLY" in ss
 assert "HII_GRAPH_NAV_READ_ONLY_PREVIEW=BLOCKED" in ss
+
+
+
+# HII text may be retained beyond one DMA chunk, but each low-level DMA build
+# remains bounded to 32 characters and navigation uses the phrase queue.
+norm_start = text.index("static int normalize_prompt")
+norm_end = text.index("static int get_hii_string", norm_start)
+norm = text[norm_start:norm_end]
+assert "QEV_NAV_TEXT_MAX" in norm
+
+dma_start = text.index("static int speech_dma_begin")
+dma_end = text.index("static int speech_dma_poll", dma_start)
+dma = text[dma_start:dma_end]
+assert "text_count > 32u" in dma
+
+wait_start = text.index("static int wait_navigation_keys")
+wait_end = text.index("#endif", wait_start)
+wait = text[wait_start:wait_end]
+assert "speech_phrase_begin(speech_text, speech_length)" in wait
+assert "speech_phrase_poll(1000u, &progressed)" in wait
+assert "speech_phrase_cancel()" in wait
+
+run_start = text.index("static int run_speech_dma")
+run_end = text.index("static u16 rd16", run_start)
+run = text[run_start:run_end]
+assert "speech_phrase_begin" in run and "speech_phrase_poll" in run
 
 print("SCREEN_READER_NAVIGATION_SOURCE_CONTRACT=PASS")
