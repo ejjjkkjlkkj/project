@@ -50,6 +50,24 @@ def compact_word_clips() -> dict[str, bytes]:
     }
 
 
+@lru_cache(maxsize=1)
+def compact_spelling_clips() -> tuple[dict[str, bytes], dict[str, bytes]]:
+    voicecore = gu.load_voicecore()
+    letters = {
+        ch: gu.compact_voice_clip(
+            voicecore.synthesize(voicecore.LETTER_NAMES[ch], "screen")
+        )
+        for ch in "abcdefghijklmnopqrstuvwxyz"
+    }
+    digits = {
+        ch: gu.compact_voice_clip(
+            voicecore.synthesize(voicecore.DIGITS[ch], "screen")
+        )
+        for ch in "0123456789"
+    }
+    return letters, digits
+
+
 def _trunc_div3(value: int) -> int:
     return value // 3 if value >= 0 else -((-value) // 3)
 
@@ -93,15 +111,15 @@ def render_runtime_pcm(text: str) -> bytes:
         if i != 0 and text[i - 1] != " ":
             pcm += bytes(GRAPHEME_GAP_BYTES)
 
+        letters, digits = compact_spelling_clips()
         if "a" <= ch <= "z":
-            sequence = gu.LETTER_UNITS[ch]
+            clip = letters[ch]
         elif "0" <= ch <= "9":
-            sequence = gu.DIGIT_UNITS[ch]
+            clip = digits[ch]
         else:
             raise ValueError(f"unsupported runtime character: {ch!r}")
 
-        for unit_name in sequence:
-            pcm += units[unit_name]
+        pcm += expand_pcm8_16k(clip)
         i += 1
 
     pcm += bytes(TAIL_SILENCE_BYTES)
