@@ -52,10 +52,18 @@ jobs:
           set -euo pipefail
           sudo apt-get update
           sudo apt-get install -y clang lld
+          clang -std=c11 -Wall -Wextra -Werror -pedantic navigation/uefi/semantic_core.c navigation/uefi/test_semantic_core.c -o build/semantic_core_test
+          ./build/semantic_core_test | tee build/semantic_core-test.txt
+          grep -F 'UEFI_SEMANTIC_CORE_TESTS=PASS' build/semantic_core-test.txt
+          clang -std=c11 -Wall -Wextra -Werror -pedantic -fsanitize=address,undefined -fno-omit-frame-pointer navigation/uefi/semantic_core.c navigation/uefi/test_semantic_core.c -o build/semantic_core_test_san
+          ASAN_OPTIONS=detect_leaks=1 ./build/semantic_core_test_san | tee build/semantic_core-sanitizer.txt
+          grep -F 'UEFI_SEMANTIC_CORE_TESTS=PASS' build/semantic_core-sanitizer.txt
           flags='--target=x86_64-pc-windows-msvc -DQEV_INTERACTIVE_NAV=1 -ffreestanding -fshort-wchar -fno-stack-protector -fno-builtin -mno-red-zone -nostdlib -O2 -Wall -Wextra -Werror'
+          clang $flags -c navigation/uefi/semantic_core.c -o build/semantic_core.obj
+          test -s build/semantic_core.obj
           clang $flags -c navigation/uefi/hii_graph_prompt_speech_uefi.c -o build/navigation.obj
           clang $flags -c build/navigation_units.c -o build/navigation_units.obj
-          lld-link /subsystem:efi_application /entry:efi_main /nodefaultlib /machine:x64 /timestamp:0 /out:build/NAVIGATION.EFI build/navigation.obj build/navigation_units.obj
+          lld-link /subsystem:efi_application /entry:efi_main /nodefaultlib /machine:x64 /timestamp:0 /out:build/NAVIGATION.EFI build/navigation.obj build/navigation_units.obj build/semantic_core.obj
           test -s build/NAVIGATION.EFI
           grep -aF 'HII_GRAPH_NAV_REALTIME_MODE=INTERRUPTIBLE_DMA' build/NAVIGATION.EFI
           grep -aF 'HII_GRAPH_SPEECH_QUEUE=INTERRUPTIBLE_64' build/NAVIGATION.EFI
@@ -93,6 +101,7 @@ jobs:
           grep -aF 'HII_GRAPH_NAV_FOCUS_VALUE_SPEECH=PASS' build/NAVIGATION.EFI
           grep -aF 'HII_GRAPH_NAV_INITIAL_VALUE_SPEECH=PASS' build/NAVIGATION.EFI
           grep -aF 'HII_GRAPH_NAV_SEMANTIC_SPEECH=ROLE_STATE_LABEL_VALUE' build/NAVIGATION.EFI
+          grep -aF 'HII_GRAPH_NAV_SEMANTIC_CORE=PASS' build/NAVIGATION.EFI
           grep -aF 'HII_GRAPH_NAV_PROFILE=M1603QA_BIOS_308' build/NAVIGATION.EFI
           grep -aF 'HII_GRAPH_NAV_PACKAGE_GUID_MATCH=PASS' build/NAVIGATION.EFI
           grep -aF 'HII_GRAPH_NAV_ROOT_FORM_2710=PASS' build/NAVIGATION.EFI
@@ -153,4 +162,7 @@ jobs:
           path: |
             build/NAVIGATION.EFI
             build/navigation_units.txt
+            build/semantic_core-test.txt
+            build/semantic_core-sanitizer.txt
+            build/semantic_core.obj
           if-no-files-found: error
