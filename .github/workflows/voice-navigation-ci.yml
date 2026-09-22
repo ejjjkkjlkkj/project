@@ -57,6 +57,12 @@ jobs:
           lld-link /subsystem:efi_application /entry:efi_main /nodefaultlib /machine:x64 /timestamp:0 /out:build/NAVIGATION.EFI build/navigation.obj build/navigation_units.obj
           test -s build/NAVIGATION.EFI
           grep -aF 'HII_GRAPH_NAV_REALTIME_MODE=INTERRUPTIBLE_DMA' build/NAVIGATION.EFI
+          grep -aF 'HII_GRAPH_SPEECH_QUEUE=INTERRUPTIBLE_64' build/NAVIGATION.EFI
+          grep -aF 'HII_GRAPH_SPEECH_WORD_BOUNDARY_CHUNKING=PASS' build/NAVIGATION.EFI
+          grep -aF 'HII_GRAPH_SPEECH_MULTI_CHUNK=PASS' build/NAVIGATION.EFI
+          grep -aF 'HII_GRAPH_SPEECH_CHUNK_START=PASS' build/NAVIGATION.EFI
+          grep -aF 'HII_GRAPH_SPEECH_CHUNK_CONTINUE=PASS' build/NAVIGATION.EFI
+          grep -aF 'HII_GRAPH_SPEECH_PHRASE_COMPLETE=PASS' build/NAVIGATION.EFI
           grep -aF 'HII_GRAPH_NAV_REALTIME_FOCUS_SPEECH=PASS' build/NAVIGATION.EFI
           grep -aF 'HII_GRAPH_NAV_SEMANTIC_ROLE=PASS' build/NAVIGATION.EFI
           grep -aF 'HII_GRAPH_NAV_CONTEXT_HELP_SPEECH=PASS' build/NAVIGATION.EFI
