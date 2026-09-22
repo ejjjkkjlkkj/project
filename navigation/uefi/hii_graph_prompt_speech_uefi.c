@@ -152,7 +152,7 @@ static char g_prompt_text[33];
 static u32 g_prompt_count;
 
 #ifdef QEV_INTERACTIVE_NAV
-#define MAX_HII_NAV_PROMPTS 32
+#define MAX_HII_NAV_PROMPTS 128
 static char g_nav_prompts[MAX_HII_NAV_PROMPTS][33];
 static u8 g_nav_prompt_lengths[MAX_HII_NAV_PROMPTS];
 static u8 g_nav_prompt_opcodes[MAX_HII_NAV_PROMPTS];
@@ -166,6 +166,14 @@ static u8 g_nav_speech_length;
 static char g_nav_help_text[33];
 static u8 g_nav_help_length;
 static u8 g_nav_help_available;
+static u16 g_nav_ref_form_ids[MAX_HII_NAV_PROMPTS];
+static u16 g_nav_current_form_id;
+static char g_nav_form_title[33];
+static u8 g_nav_form_title_length;
+static u16 g_nav_form_history[16];
+static u8 g_nav_form_history_depth;
+static hii_string_protocol *g_nav_hii_string;
+static void *g_nav_hii_handle;
 static u8 g_nav_event_mask;
 static u8 g_nav_speech_events;
 static u8 g_nav_realtime_events;
@@ -1131,7 +1139,7 @@ static int get_hii_string(hii_string_protocol *str, void *handle, u16 token, cha
 
 #ifdef QEV_INTERACTIVE_NAV
 static int nav_prompt_add(u8 opcode, const char *text, u32 count,
-                          const char *help, u32 help_count) {
+                          const char *help, u32 help_count, u16 ref_form_id) {
     if (!text || !count || count > 32u || help_count > 32u) return 0;
     for (u8 i = 0; i < g_nav_prompt_total; ++i) {
         if (g_nav_prompt_lengths[i] != (u8)count ||
@@ -1154,6 +1162,7 @@ static int nav_prompt_add(u8 opcode, const char *text, u32 count,
     g_nav_prompts[slot][count] = 0;
     g_nav_prompt_lengths[slot] = (u8)count;
     g_nav_prompt_opcodes[slot] = opcode;
+    g_nav_ref_form_ids[slot] = ref_form_id;
     for (u32 j = 0; j < help_count; ++j) g_nav_help[slot][j] = help[j];
     g_nav_help[slot][help_count] = 0;
     g_nav_help_lengths[slot] = (u8)help_count;
@@ -1183,6 +1192,135 @@ static void nav_prompt_load(u8 index) {
     for (u32 j = 0; j < g_nav_help_length; ++j)
         g_nav_help_text[j] = g_nav_help[index][j];
     g_nav_help_text[g_nav_help_length] = 0;
+}
+
+static int nav_text_is_setup(const char *text, u32 count) {
+    return text && count == 5u &&
+           text[0] == 's' && text[1] == 'e' && text[2] == 't' &&
+           text[3] == 'u' && text[4] == 'p';
+}
+
+static int nav_package_is_setup(hii_string_protocol *str, void *handle) {
+    if (!str || !handle) return 0;
+    u32 list_len = rd32(g_hii_package + 16);
+    if (list_len < 24u || list_len > sizeof(g_hii_package)) return 0;
+    const u8 *p = g_hii_package + 20;
+    const u8 *list_end = g_hii_package + list_len;
+    while (p + 4u <= list_end) {
+        u32 hdr = rd32(p);
+        u32 len = hdr & 0x00ffffffu;
+        u8 type = (u8)(hdr >> 24);
+        if (len < 4u || p + len > list_end) return 0;
+        if (type == 0xdfu) break;
+        if (type == 0x02u) {
+            const u8 *q = p + 4;
+            const u8 *end = p + len;
+            while (q + 2u <= end) {
+                u8 op = q[0];
+                u32 oplen = (u32)(q[1] & 0x7fu);
+                if (oplen < 2u || q + oplen > end) break;
+                if (op == 0x0eu && oplen >= 22u) {
+                    char title[33];
+                    u32 title_count = 0;
+                    u16 title_token = rd16(q + 18);
+                    if (title_token &&
+                        get_hii_string(str, handle, title_token, title, &title_count) &&
+                        nav_text_is_setup(title, title_count))
+                        return 1;
+                }
+                q += oplen;
+            }
+        }
+        p += len;
+    }
+    return 0;
+}
+
+/*
+ * Read-only form browser: collect only one IFR form at a time instead of
+ * flattening every firmware page into one prompt list. REF activation can
+ * then enter the referenced form without changing NVRAM or firmware values.
+ */
+static int nav_load_form(u16 requested_form_id) {
+    if (!g_nav_hii_string || !g_nav_hii_handle) return 0;
+    u32 list_len = rd32(g_hii_package + 16);
+    if (list_len < 24u || list_len > sizeof(g_hii_package)) return 0;
+
+    g_nav_prompt_total = 0;
+    g_nav_prompt_index = 0;
+    g_nav_help_available = 0;
+    g_nav_form_title[0] = 0;
+    g_nav_form_title_length = 0;
+
+    u16 selected_form_id = 0;
+    int in_selected_form = 0;
+    const u8 *p = g_hii_package + 20;
+    const u8 *list_end = g_hii_package + list_len;
+    while (p + 4u <= list_end) {
+        u32 hdr = rd32(p);
+        u32 len = hdr & 0x00ffffffu;
+        u8 type = (u8)(hdr >> 24);
+        if (len < 4u || p + len > list_end) return 0;
+        if (type == 0xdfu) break;
+        if (type == 0x02u) {
+            const u8 *q = p + 4;
+            const u8 *end = p + len;
+            while (q + 2u <= end) {
+                u8 op = q[0];
+                u32 oplen = (u32)(q[1] & 0x7fu);
+                if (oplen < 2u || q + oplen > end) break;
+
+                if (op == 0x01u && oplen >= 6u) {
+                    u16 form_id = rd16(q + 2);
+                    if (in_selected_form) break;
+                    if ((requested_form_id == 0u && selected_form_id == 0u) ||
+                        form_id == requested_form_id) {
+                        selected_form_id = form_id;
+                        in_selected_form = 1;
+                        u16 title_token = rd16(q + 4);
+                        u32 title_count = 0;
+                        if (title_token &&
+                            get_hii_string(g_nav_hii_string, g_nav_hii_handle,
+                                           title_token, g_nav_form_title, &title_count)) {
+                            g_nav_form_title_length = (u8)title_count;
+                        }
+                    }
+                } else if (in_selected_form && prompt_opcode(op) && oplen >= 4u) {
+                    u16 token = rd16(q + 2);
+                    char candidate[33];
+                    char help_candidate[33];
+                    u32 candidate_count = 0;
+                    u32 help_count = 0;
+                    u16 help_token = oplen >= 6u ? rd16(q + 4) : 0u;
+                    if (help_token)
+                        (void)get_hii_string(g_nav_hii_string, g_nav_hii_handle,
+                                             help_token, help_candidate, &help_count);
+                    if (token &&
+                        get_hii_string(g_nav_hii_string, g_nav_hii_handle,
+                                       token, candidate, &candidate_count)) {
+                        u16 ref_form_id =
+                            (op == 0x0fu && oplen >= 15u) ? rd16(q + 13) : 0u;
+                        (void)nav_prompt_add(op, candidate, candidate_count,
+                                             help_candidate, help_count, ref_form_id);
+                    }
+                }
+                q += oplen;
+            }
+        }
+        p += len;
+    }
+
+    if (!selected_form_id || !g_nav_prompt_total) return 0;
+    g_nav_current_form_id = selected_form_id;
+    nav_prompt_load(0u);
+    marker("HII_GRAPH_NAV_FORM_AWARE=PASS");
+    marker("HII_GRAPH_NAV_FORM_LOAD=PASS");
+    if (g_nav_form_title_length) {
+        serial_puts("HII_GRAPH_NAV_FORM_TITLE=");
+        serial_puts(g_nav_form_title);
+        serial_puts("\r\n");
+    }
+    return 1;
 }
 #endif
 
@@ -1222,6 +1360,22 @@ static int resolve_hii_prompt(void *system_table) {
             size < 24u || size > sizeof(g_hii_package)) continue;
         u32 list_len = rd32(g_hii_package + 16);
         if (list_len < 24u || list_len > size) continue;
+#ifdef QEV_INTERACTIVE_NAV
+        if (nav_package_is_setup(str, handle)) {
+            g_nav_hii_string = str;
+            g_nav_hii_handle = handle;
+            g_nav_form_history_depth = 0u;
+            if (nav_load_form(0u)) {
+                marker("HII_GRAPH_NAV_SETUP_FORMSET=PASS");
+                marker("IFR_PROMPT_STRING_ID=PASS");
+                marker("HII_LANGUAGE_AND_STRING=PASS");
+                marker("HII_GRAPH_NAV_PROMPT_COLLECTION=PASS");
+                marker("HII_GRAPH_NAV_SEMANTIC_ROLE=PASS");
+                marker("HII_PROMPT_SOURCE=PASS");
+                return 1;
+            }
+        }
+#endif
         const u8 *p = g_hii_package + 20;
         const u8 *list_end = g_hii_package + list_len;
         while (p + 4 <= list_end) {
@@ -1250,7 +1404,8 @@ static int resolve_hii_prompt(void *system_table) {
                             (void)get_hii_string(str, handle, help_token, help_candidate, &help_count);
                         if (token && get_hii_string(str, handle, token, candidate, &candidate_count)) {
                             nav_prompt_add(op, candidate, candidate_count,
-                                           help_candidate, help_count);
+                                           help_candidate, help_count,
+                                           (op == 0x0fu && oplen >= 15u) ? rd16(q + 13) : 0u);
                         }
 #else
                         if (token && get_hii_string(str, handle, token, g_prompt_text, &g_prompt_count)) {
@@ -1543,7 +1698,7 @@ static int wait_repeat_key(void *system_table) {
 
 #ifdef QEV_INTERACTIVE_NAV
 static int wait_navigation_keys(void *system_table) {
-    if (!system_table || g_nav_prompt_total < 2u) return 0;
+    if (!system_table || !g_nav_prompt_total) return 0;
     simple_text_input_protocol *conin =
         *(simple_text_input_protocol **)((u8 *)system_table + 0x30);
     if (!conin || !conin->read_key || !g_stall) return 0;
@@ -1572,15 +1727,43 @@ static int wait_navigation_keys(void *system_table) {
             if (key.unicode_char == 0x001bu || key.scan_code == 0x0017u) {
                 marker("HII_GRAPH_NAV_KEY=ESC");
                 speech_dma_stop();
-                if ((g_nav_event_mask & NAV_REQUIRED_MASK) != NAV_REQUIRED_MASK ||
-                    g_nav_speech_events < 7u) {
-                    marker("HII_GRAPH_NAV_REQUIRED_EVENTS=PENDING");
-                    marker("HII_GRAPH_NAV_EXIT=BLOCKED_INCOMPLETE");
-                    continue;
+                if (g_nav_form_history_depth) {
+                    u16 parent = g_nav_form_history[--g_nav_form_history_depth];
+                    if (!nav_load_form(parent)) return 0;
+                    marker("HII_GRAPH_NAV_FORM_BACK=PASS");
+                    speak = 1;
+                } else {
+                    if ((g_nav_event_mask & NAV_REQUIRED_MASK) != NAV_REQUIRED_MASK ||
+                        g_nav_speech_events < 7u) {
+                        marker("HII_GRAPH_NAV_REQUIRED_EVENTS=PENDING");
+                        marker("HII_GRAPH_NAV_EXIT=BLOCKED_INCOMPLETE");
+                        continue;
+                    }
+                    marker("HII_GRAPH_NAV_REQUIRED_EVENTS=PASS");
+                    marker("HII_GRAPH_NAV_EXIT=PASS");
+                    return 1;
                 }
-                marker("HII_GRAPH_NAV_REQUIRED_EVENTS=PASS");
-                marker("HII_GRAPH_NAV_EXIT=PASS");
-                return 1;
+            }
+            if (key.unicode_char == 0x000du) {
+                marker("HII_GRAPH_NAV_KEY=ENTER");
+                u16 target = g_nav_ref_form_ids[g_nav_prompt_index];
+                if (target) {
+                    u16 previous = g_nav_current_form_id;
+                    if (g_nav_form_history_depth >= 16u) return 0;
+                    g_nav_form_history[g_nav_form_history_depth++] = previous;
+                    speech_dma_stop();
+                    if (!nav_load_form(target)) {
+                        --g_nav_form_history_depth;
+                        return 0;
+                    }
+                    marker("HII_GRAPH_NAV_FORM_ENTER=PASS");
+                    speak = 1;
+                } else {
+                    marker("HII_GRAPH_NAV_READ_ONLY_ACTION=BLOCKED");
+                    speech_override = "read only";
+                    speech_override_length = 9u;
+                    speak = 1;
+                }
             }
             if (key.unicode_char == (u16)'w' || key.unicode_char == (u16)'W') {
                 marker("HII_GRAPH_NAV_KEY=W");
