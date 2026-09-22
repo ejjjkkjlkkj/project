@@ -101,6 +101,8 @@ required = (
     'HII_GRAPH_NAV_FORM_TITLE_SPEECH=PASS',
     'HII_GRAPH_NAV_READ_ONLY_ACTION=BLOCKED',
     'HII_GRAPH_NAV_SELF_REF_ACTION=BLOCKED',
+    'HII_GRAPH_NAV_DISABLED_ACTION=BLOCKED',
+    'HII_GRAPH_NAV_CONDITIONAL_ACTION=BLOCKED',
     'g_m1603qa_308_setup_package_list_guid',
     'guid_bytes_equal',
     'nav_get_form_title',
