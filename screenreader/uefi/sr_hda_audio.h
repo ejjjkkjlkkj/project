@@ -23,6 +23,7 @@ typedef struct {
     sr_u8 playing;
 } sr_hda_audio;
 
+int sr_hda_audio_static_selftest(void);
 int sr_hda_audio_init(sr_hda_audio *audio, void *system_table);
 sr_audio_sink sr_hda_audio_as_sink(sr_hda_audio *audio);
 void sr_hda_audio_stop(sr_hda_audio *audio);
