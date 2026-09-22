@@ -108,10 +108,16 @@ static const sr_voice_unit *v_longest_prefix(const sr_voice_stream *voice,
         if (n <= best_len) continue;
 
         /*
-         * Whole word/phrase units must stop on a separator. One-character
-         * units are permitted inside unknown words for guaranteed spelling.
+         * Cached lexical units are accepted only on token boundaries.
+         * Otherwise an unknown word must stay in the explicit spelling
+         * fallback path so coverage metrics remain truthful.
          */
-        if (n > 1u && text[n] && !v_is_space(text[n])) continue;
+        {
+            int at_start = voice->text_pos == 0u ||
+                           v_is_space(voice->text[voice->text_pos - 1u]);
+            int at_end = !text[n] || v_is_space(text[n]);
+            if (!at_start || !at_end) continue;
+        }
         best = &voice->bank->units[i];
         best_len = n;
     }
@@ -153,7 +159,13 @@ static const sr_voice_unit *v_next_unit(sr_voice_stream *voice) {
     }
 
     voice->fallback_units++;
-    return v_next_unit(voice);
+
+    /*
+     * Unsupported code points are skipped iteratively by the caller's next
+     * pump. Avoid recursive fallback so malformed firmware strings cannot
+     * grow the pre-OS stack.
+     */
+    return 0;
 }
 
 static int v_begin(void *ctx, sr_u32 token, sr_speech_priority priority) {
