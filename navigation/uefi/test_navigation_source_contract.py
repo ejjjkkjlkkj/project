@@ -54,6 +54,15 @@ required = (
     'HII_GRAPH_NAV_STAGED_NUMERIC_MODE=PASS',
     'HII_GRAPH_NAV_STAGED_NUMERIC=PASS',
     'HII_GRAPH_NAV_SPECIALIZED_METADATA=PASS',
+    'HII_GRAPH_NAV_QUESTION_FLAGS_SEMANTICS=PASS',
+    'HII_GRAPH_NAV_CALLBACK_AWARE=PASS',
+    'HII_GRAPH_NAV_READ_ONLY_PREVIEW=BLOCKED',
+    'NAV_Q_READ_ONLY',
+    'NAV_Q_CALLBACK',
+    'NAV_Q_RESET_REQUIRED',
+    'NAV_Q_RECONNECT_REQUIRED',
+    'NAV_Q_OPTIONS_ONLY',
+    'nav_append_question_flags',
     'HII_GRAPH_NAV_PASSWORD_PRIVACY=PASS',
     'HII_GRAPH_NAV_PASSWORD_REDACTION=PASS',
     'HII_GRAPH_NAV_STAGED_CONDITION_EVAL=PASS',
@@ -231,5 +240,14 @@ rq_end = text.index("static int nav_eval_condition_expression", rq_start)
 rq = text[rq_start:rq_end]
 assert "nav_stage_find" in rq and "nav_find_question" in rq
 assert rq.index("nav_stage_find") < rq.index("nav_find_question")
+
+
+
+# RAM preview must never edit a question marked EFI_IFR_FLAG_READ_ONLY.
+ss_start = text.index("static int nav_stage_set")
+ss_end = text.index("static void nav_stage_clear_all", ss_start)
+ss = text[ss_start:ss_end]
+assert "NAV_Q_READ_ONLY" in ss
+assert "HII_GRAPH_NAV_READ_ONLY_PREVIEW=BLOCKED" in ss
 
 print("SCREEN_READER_NAVIGATION_SOURCE_CONTRACT=PASS")
