@@ -176,6 +176,7 @@ static u16 g_nav_form_history[16];
 static u8 g_nav_form_history_depth;
 static hii_string_protocol *g_nav_hii_string;
 static void *g_nav_hii_handle;
+static u8 g_nav_m1603qa_308_profile;
 static u8 g_nav_event_mask;
 static u8 g_nav_speech_events;
 static u8 g_nav_realtime_events;
@@ -1341,6 +1342,23 @@ static int nav_load_form(u16 requested_form_id) {
                                              help_token, help_candidate, &help_count);
                     u16 ref_form_id =
                         (op == 0x0fu && oplen >= 15u) ? rd16(q + 13) : 0u;
+
+                    /*
+                     * BIOS 308 carries two parallel top-level Setup trees.
+                     * On M1603QA the notebook UI is 0x2716..0x271A; the older
+                     * 0x2711..0x2715 tree is wrapped in SuppressIf. Until the
+                     * full IFR expression VM lands, lock the exact profile's
+                     * root page to the known notebook tree so the screen
+                     * reader never exposes duplicate/hidden tabs.
+                     */
+                    if (g_nav_m1603qa_308_profile &&
+                        selected_form_id == 0x2710u && op == 0x0fu &&
+                        (ref_form_id < 0x2716u || ref_form_id > 0x271au)) {
+                        marker("HII_GRAPH_NAV_M1603QA_ROOT_FILTER=PASS");
+                        q += oplen;
+                        continue;
+                    }
+
                     int have_prompt =
                         token && get_hii_string(g_nav_hii_string, g_nav_hii_handle,
                                                 token, candidate, &candidate_count);
@@ -1425,8 +1443,12 @@ static int resolve_hii_prompt(void *system_table) {
 
         g_nav_hii_string = str;
         g_nav_hii_handle = handle;
+        g_nav_m1603qa_308_profile = 1u;
         g_nav_form_history_depth = 0u;
-        if (!nav_load_form(0x2710u)) continue;
+        if (!nav_load_form(0x2710u)) {
+            g_nav_m1603qa_308_profile = 0u;
+            continue;
+        }
 
         marker("HII_GRAPH_NAV_PROFILE=M1603QA_BIOS_308");
         marker("HII_GRAPH_NAV_PACKAGE_GUID_MATCH=PASS");
@@ -1441,6 +1463,7 @@ static int resolve_hii_prompt(void *system_table) {
     }
 
     /* Reset counters before the standards-generic Setup-title fallback. */
+    g_nav_m1603qa_308_profile = 0u;
     g_nav_prompt_total = 0;
     g_nav_prompt_index = 0;
     g_nav_help_available = 0;
@@ -1829,6 +1852,11 @@ static int wait_navigation_keys(void *system_table) {
                     u16 parent = g_nav_form_history[--g_nav_form_history_depth];
                     if (!nav_load_form(parent)) return 0;
                     marker("HII_GRAPH_NAV_FORM_BACK=PASS");
+                    if (g_nav_form_title_length) {
+                        speech_override = g_nav_form_title;
+                        speech_override_length = g_nav_form_title_length;
+                        marker("HII_GRAPH_NAV_FORM_TITLE_SPEECH=PASS");
+                    }
                     speak = 1;
                 } else {
                     if ((g_nav_event_mask & NAV_REQUIRED_MASK) != NAV_REQUIRED_MASK ||
@@ -1855,6 +1883,11 @@ static int wait_navigation_keys(void *system_table) {
                         return 0;
                     }
                     marker("HII_GRAPH_NAV_FORM_ENTER=PASS");
+                    if (g_nav_form_title_length) {
+                        speech_override = g_nav_form_title;
+                        speech_override_length = g_nav_form_title_length;
+                        marker("HII_GRAPH_NAV_FORM_TITLE_SPEECH=PASS");
+                    }
                     speak = 1;
                 } else {
                     marker("HII_GRAPH_NAV_READ_ONLY_ACTION=BLOCKED");
