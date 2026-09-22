@@ -54,6 +54,38 @@ static int sr_is_focusable(const sr_node *node) {
            (node->state & SR_STATE_FOCUSABLE);
 }
 
+static int sr_is_control_role(sr_role role) {
+    return role == SR_ROLE_BUTTON ||
+           role == SR_ROLE_CHECKBOX ||
+           role == SR_ROLE_RADIO ||
+           role == SR_ROLE_COMBO ||
+           role == SR_ROLE_EDIT ||
+           role == SR_ROLE_SLIDER ||
+           role == SR_ROLE_LIST_ITEM ||
+           role == SR_ROLE_MENU_ITEM ||
+           role == SR_ROLE_TAB;
+}
+
+static int sr_move_control(sr_runtime *rt, int direction) {
+    sr_u32 i;
+    if (!rt || !rt->node_count || !direction) return 0;
+    if (!rt->has_focus) return direction > 0 ? sr_focus_first(rt) : sr_focus_last(rt);
+    i = rt->focus_index;
+    if (direction > 0) {
+        while (++i < rt->node_count) {
+            if (sr_is_focusable(&rt->nodes[i]) && sr_is_control_role(rt->nodes[i].role))
+                return sr_set_focus(rt, i, 1);
+        }
+    } else {
+        while (i > 0) {
+            --i;
+            if (sr_is_focusable(&rt->nodes[i]) && sr_is_control_role(rt->nodes[i].role))
+                return sr_set_focus(rt, i, 1);
+        }
+    }
+    return 0;
+}
+
 const char *sr_role_name(sr_role role) {
     switch (role) {
         case SR_ROLE_WINDOW: return "fenetre";
@@ -356,14 +388,8 @@ int sr_handle(sr_runtime *rt, sr_command command) {
         case SR_CMD_REPEAT: return sr_repeat(rt);
         case SR_CMD_WHERE_AM_I: return sr_where_am_i(rt);
         case SR_CMD_STOP_SPEECH: sr_stop_speech(rt); return 1;
-        case SR_CMD_NEXT_CONTROL:
-            return sr_move_role(rt, SR_ROLE_BUTTON, 1) ||
-                   sr_move_role(rt, SR_ROLE_COMBO, 1) ||
-                   sr_move_role(rt, SR_ROLE_CHECKBOX, 1);
-        case SR_CMD_PREVIOUS_CONTROL:
-            return sr_move_role(rt, SR_ROLE_BUTTON, -1) ||
-                   sr_move_role(rt, SR_ROLE_COMBO, -1) ||
-                   sr_move_role(rt, SR_ROLE_CHECKBOX, -1);
+        case SR_CMD_NEXT_CONTROL: return sr_move_control(rt, 1);
+        case SR_CMD_PREVIOUS_CONTROL: return sr_move_control(rt, -1);
         case SR_CMD_NEXT_EDIT: return sr_move_role(rt, SR_ROLE_EDIT, 1);
         case SR_CMD_PREVIOUS_EDIT: return sr_move_role(rt, SR_ROLE_EDIT, -1);
         case SR_CMD_NEXT_CHECKBOX: return sr_move_role(rt, SR_ROLE_CHECKBOX, 1);
