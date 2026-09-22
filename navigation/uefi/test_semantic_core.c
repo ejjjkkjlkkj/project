@@ -17,6 +17,18 @@ static void test_toggle_focus(void) {
     assert(out.truncated == 0u);
 }
 
+static void test_button_without_value_is_spoken(void) {
+    qev_semantic_node node = {
+        QEV_ROLE_BUTTON, 0, "Load defaults", 0,
+        QEV_STATE_FOCUSED
+    };
+    qev_utterance out;
+    assert(qev_semantic_focus_utterance(&node, &out));
+    assert(strcmp(out.text, "button Load defaults") == 0);
+    assert(out.priority == QEV_SPEECH_FOCUS);
+    assert(out.interrupt == 1u);
+}
+
 static void test_password_is_redacted(void) {
     qev_semantic_node node = {
         QEV_ROLE_PASSWORD_FIELD, 0, "Administrator password", "secret-value",
@@ -102,6 +114,7 @@ static void test_truncation_is_nul_safe(void) {
 
 int main(void) {
     test_toggle_focus();
+    test_button_without_value_is_spoken();
     test_password_is_redacted();
     test_firmware_states();
     test_unknown_native_role_fallback();
