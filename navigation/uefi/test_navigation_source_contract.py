@@ -35,7 +35,7 @@ required = (
     'speech_phrase_start_next',
     'g_speech_phrase',
     'g_speech_chunk',
-    'HII_GRAPH_NAV_DIRECTIONAL_ALIASES=PASS',
+    'HII_GRAPH_NAV_DIRECTIONAL_MODEL=BLIND_SIMPLE',
     'HII_GRAPH_NAV_TAB_FORWARD=PASS',
     'HII_GRAPH_NAV_CONTEXT_HELP=PASS',
     'HII_GRAPH_NAV_CONTEXT_HELP_SPEECH=PASS',
