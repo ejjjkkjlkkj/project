@@ -136,6 +136,11 @@ def main() -> int:
                 )
                 item["speech_complete"] = "PASS"
                 print(f"QEMU_SPEECH_{key.upper()}_COMPLETE=PASS")
+                # The HDA IOC proves the guest consumed the whole DMA buffer,
+                # but QEMU's WAV backend may still have host-side frames to
+                # flush. Preserve a small capture margin before the next key
+                # (especially Escape/quit after the final utterance).
+                time.sleep(args.delay)
             else:
                 time.sleep(args.delay)
 
