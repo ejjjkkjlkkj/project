@@ -89,11 +89,18 @@ Question-header flags are also semantic: `READ_ONLY`, `CALLBACK`, `RESET_REQUIRE
 
 ### Long HII speech
 
-Normalized HII labels, option names, form titles, and contextual help can now retain up to 64 characters. The HDA renderer still keeps each low-level DMA synthesis chunk at 32 characters, but a phrase queue splits longer utterances at word boundaries, automatically starts the next chunk, and remains interruptible on every new navigation event. The same queue is used by blocking boot-proof speech and realtime focus speech, while reusing the existing DMA allocation.
+Normalized HII labels, option names, form titles, and contextual help can now retain up to 127 characters. The HDA renderer still keeps each low-level DMA synthesis chunk at 32 characters, but a phrase queue splits longer utterances at word boundaries, automatically starts the next chunk, and remains interruptible on every new navigation event. The same queue is used by blocking boot-proof speech and realtime focus speech, while reusing the existing DMA allocation.
 
 
 ### Hybrid firmware-word speech
 
 The native HDA speech path no longer has to spell every common BIOS word letter by letter. A compact generated lexicon maps recurring firmware words such as `boot`, `security`, `configuration`, `password`, `network`, `save`, and `exit` to sequences from the existing first-party allophone bank. This adds word-level pronunciation without adding whole-word PCM assets.
 
-Unknown words, acronyms, serials, and vendor-specific tokens still use the deterministic French letter-name fallback, so coverage remains complete. Word units use a shorter 3 ms inter-allophone gap; fallback spelling keeps the 12 ms grapheme gap. The 64-character interruptible phrase queue remains unchanged.
+Unknown words, acronyms, serials, and vendor-specific tokens still use the deterministic French letter-name fallback, so coverage remains complete. Word units use a shorter 3 ms inter-allophone gap; fallback spelling keeps the 12 ms grapheme gap. The 127-character interruptible phrase queue remains unchanged.
+
+
+### Portable semantic speech core
+
+Focus speech is now generated through a separate allocation-free firmware semantic core rather than ad-hoc string assembly in the HII parser. IFR controls are mapped to native roles such as choice, toggle, numeric setting, text setting, password field, firmware menu, status, and button. Live HII condition/question flags become semantic states including disabled, read-only, preview, callback, reset-required, reconnect-required, checked, and protected.
+
+The core owns the focus-event priority/interruption policy and hard password redaction. Its host tests run independently from the UEFI image build, then the same freestanding object is linked into NAVIGATION.EFI. The utterance capacity is 128 bytes including NUL, so the runtime phrase queue accepts up to 127 normalized characters and still emits interruptible 32-character HDA DMA chunks.
