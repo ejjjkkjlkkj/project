@@ -53,9 +53,15 @@ jobs:
           clang $flags -c sr_keymap.c -o sr_keymap.obj
           clang $flags -c sr_voice_stream.c -o sr_voice_stream.obj
           clang $flags -c sr_hii_ifr.c -o sr_hii_ifr.obj
+          clang $flags -c sr_uefi_hii.c -o sr_uefi_hii.obj
+          clang $flags -c sr_uefi_input.c -o sr_uefi_input.obj
+          clang $flags -c sr_uefi_runtime.c -o sr_uefi_runtime.obj
           test -s sr_core.obj
           test -s sr_voice_stream.obj
           test -s sr_hii_ifr.obj
+          test -s sr_uefi_hii.obj
+          test -s sr_uefi_input.obj
+          test -s sr_uefi_runtime.obj
           echo UEFI_FREESTANDING_OBJECTS=PASS
 
       - name: Upload proofs
