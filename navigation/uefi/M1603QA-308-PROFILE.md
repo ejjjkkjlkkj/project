@@ -64,6 +64,8 @@ The BIOS 308 reader now exposes a read-only navigation layer plus a **non-persis
 | F/B/X/C/E (+ uppercase reverse variants) | Structural navigation by form/button/checkbox/choice/editable control |
 | O / Shift+O | Preview next / previous OneOf value in RAM |
 | Space | Preview checkbox toggle in RAM |
+| M | Speak the number of pending preview edits |
+| Z | Discard the preview edit for the current control |
 | D | Discard every staged preview edit |
 | S | Save is deliberately blocked until a verified HII ConfigAccess/RouteConfig commit path exists |
 
