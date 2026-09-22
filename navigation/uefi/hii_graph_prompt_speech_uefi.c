@@ -1475,6 +1475,7 @@ static int nav_effective_scalar_value(void *system_table, u8 prompt_index,
 }
 
 static u8 nav_append_decimal(char *out, u8 n, u8 cap, u32 value);
+static u8 nav_append_u64_decimal(char *out, u8 n, u8 cap, u64 value);
 
 static u8 nav_append_text(char *out, u8 n, u8 cap, const char *text) {
     if (!out || !text) return n;
@@ -1521,12 +1522,12 @@ static int nav_build_control_detail_speech(u8 prompt_index,
         static const char max_text[] = " max ";
         static const char step_text[] = " step ";
         for (u8 i = 0u; min_text[i] && n < 32u; ++i) out[n++] = min_text[i];
-        n = nav_append_decimal(out, n, 32u, (u32)g_nav_prompt_min_value[prompt_index]);
+        n = nav_append_u64_decimal(out, n, 32u, g_nav_prompt_min_value[prompt_index]);
         for (u8 i = 0u; max_text[i] && n < 32u; ++i) out[n++] = max_text[i];
-        n = nav_append_decimal(out, n, 32u, (u32)g_nav_prompt_max_value[prompt_index]);
+        n = nav_append_u64_decimal(out, n, 32u, g_nav_prompt_max_value[prompt_index]);
         if (g_nav_prompt_step_value[prompt_index]) {
             for (u8 i = 0u; step_text[i] && n < 32u; ++i) out[n++] = step_text[i];
-            n = nav_append_decimal(out, n, 32u, (u32)g_nav_prompt_step_value[prompt_index]);
+            n = nav_append_u64_decimal(out, n, 32u, g_nav_prompt_step_value[prompt_index]);
         }
     } else if (op == 0x1cu || op == 0x08u) {
         static const char min_text[] = "min ";
@@ -1669,6 +1670,17 @@ static int nav_stage_adjust_numeric(void *system_table, u8 prompt_index,
 
 static u8 nav_append_decimal(char *out, u8 n, u8 cap, u32 value) {
     char digits[10];
+    u8 count = 0u;
+    do {
+        digits[count++] = (char)('0' + (value % 10u));
+        value /= 10u;
+    } while (value && count < (u8)sizeof(digits));
+    while (count && n < cap) out[n++] = digits[--count];
+    return n;
+}
+
+static u8 nav_append_u64_decimal(char *out, u8 n, u8 cap, u64 value) {
+    char digits[20];
     u8 count = 0u;
     do {
         digits[count++] = (char)('0' + (value % 10u));
