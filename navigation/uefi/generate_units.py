@@ -5,6 +5,7 @@ from pathlib import Path
 
 ROOT=Path(__file__).resolve().parents[2]
 SOURCE=ROOT/'voice'/'uefi_units'/'build_native_units.py'
+VOICECORE_SOURCE=ROOT/'voice'/'v4'/'native_speech_v4.py'
 LETTER_UNITS={
  # Clear fallback spelling for arbitrary firmware labels. The previous map
  # treated each grapheme as a raw phoneme, which made unknown HII labels sound
@@ -155,6 +156,31 @@ def load_source():
     spec.loader.exec_module(module)
     return module
 
+def load_voicecore():
+    name='qevarynx_voicecore_v4_source'
+    spec=importlib.util.spec_from_file_location(name,VOICECORE_SOURCE)
+    if spec is None or spec.loader is None:
+        raise SystemExit('cannot load VoiceCore source')
+    module=importlib.util.module_from_spec(spec)
+    sys.modules[name]=module
+    spec.loader.exec_module(module)
+    return module
+
+def compact_voice_clip(samples: list[int]) -> bytes:
+    # VoiceCore renders 48 kHz signed-16 mono. Deterministically decimate to
+    # 16 kHz unsigned-8 mono for firmware storage. A 3-sample box filter avoids
+    # the hard aliasing that made the old allophone units sound like tones.
+    if not samples:
+        return b''
+    out=bytearray()
+    limit=len(samples)-(len(samples)%3)
+    for i in range(0,limit,3):
+        v=(int(samples[i])+int(samples[i+1])+int(samples[i+2]))//3
+        v=max(-32768,min(32767,v))
+        q=128 + (v*124)//32768
+        out.append(max(1,min(255,q)))
+    return bytes(out)
+
 def convert(raw: bytes, source_rate: int) -> bytes:
     if source_rate <= 0 or 48000 % source_rate:
         raise SystemExit(f'unsupported source sample rate: {source_rate}')
@@ -196,6 +222,10 @@ def main():
     )
     source_units=speech.make_units()
     converted={n:convert(source_units[n], speech.SAMPLE_RATE) for n in names}
+    voicecore=load_voicecore()
+    word_clips={word:compact_voice_clip(voicecore.synthesize(word,'screen')) for word in sorted(WORD_UNITS)}
+    if not all(word_clips.values()):
+        raise SystemExit('empty VoiceCore word clip')
     offsets=[]; lengths=[]; bank=bytearray()
     for n in names:
         offsets.append(len(bank)); lengths.append(len(converted[n])); bank += converted[n]
@@ -234,6 +264,15 @@ def main():
         word_unit_counts.append(len(seq))
         word_unit_flat.extend(index[u] for u in seq)
         word_unit_flat.extend([0]*(WORD_UNIT_STRIDE-len(seq)))
+
+    word_clip_offsets=[]; word_clip_lengths=[]; word_clip_bank=bytearray()
+    for word in word_names:
+        clip=word_clips[word]
+        word_clip_offsets.append(len(word_clip_bank))
+        word_clip_lengths.append(len(clip))
+        word_clip_bank += clip
+    if len(word_clip_bank) > 8*1024*1024:
+        raise SystemExit(f'word speech bank too large: {len(word_clip_bank)}')
     lines=[
         '/* Generated deterministically from first-party native speech units. */',
         arr_u8('qev_unit_bank',list(bank)),
@@ -253,6 +292,11 @@ def main():
         arr_u8('qev_word_names',word_name_flat),
         arr_u8('qev_word_unit_count',word_unit_counts),
         arr_u8('qev_word_units',word_unit_flat),
+        arr_u8('qev_word_pcm_bank',list(word_clip_bank)),
+        f'const unsigned int qev_word_pcm_bank_len = {len(word_clip_bank)}u;\n',
+        f'const unsigned int qev_word_pcm_rate_hz = 16000u;\n',
+        arr_u32('qev_word_pcm_off',word_clip_offsets),
+        arr_u32('qev_word_pcm_len',word_clip_lengths),
     ]
     out.write_text('\n'.join(lines))
     meta.write_text(
@@ -270,11 +314,15 @@ def main():
         f'word-lexicon-count={len(word_names)}\n'
         f'word-name-stride={WORD_NAME_STRIDE}\n'
         f'word-unit-stride={WORD_UNIT_STRIDE}\n'
+        f'word-pcm-bank-bytes={len(word_clip_bank)}\n'
+        f'word-pcm-bank-sha256={hashlib.sha256(word_clip_bank).hexdigest()}\n'
+        'word-pcm-rate-hz=16000\n'
+        'word-renderer=voice/v4/native_speech_v4.py:screen\n'
         'source-sample-rate-hz='+str(speech.SAMPLE_RATE)+'\n'
         'inter-letter-silence-ms=18-runtime-gap\n'
         'intra-word-phoneme-silence-ms=0\n'
         'word-silence-ms=70\n'
-        'speech-mode=hybrid-word-formant-fr-v5\n'
+        'speech-mode=whole-word-voicecore-fr-v6\n'
         'full-utterance-asset=false\n'
     )
     print('HII_GRAPH_PROMPT_UNIT_GENERATION=PASS')
