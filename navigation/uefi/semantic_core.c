@@ -24,7 +24,7 @@ static unsigned int qev_append_token(char *out, unsigned int n,
                                      unsigned char *truncated) {
     if (!qev_text_nonempty(text)) return n;
     if (n) {
-        n = qev_append_raw(out, n, cap, ", ", truncated);
+        n = qev_append_raw(out, n, cap, " ", truncated);
     }
     return qev_append_raw(out, n, cap, text, truncated);
 }
