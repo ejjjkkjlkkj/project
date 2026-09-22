@@ -1,0 +1,68 @@
+name: uefi-screenreader-zero-ci
+
+on:
+  push:
+    branches:
+      - uefi-screenreader-zero-20260922
+    paths:
+      - 'screenreader/**'
+      - '.github/workflows/uefi-screenreader-zero-ci.yml'
+  pull_request:
+    paths:
+      - 'screenreader/**'
+      - '.github/workflows/uefi-screenreader-zero-ci.yml'
+  workflow_dispatch:
+
+jobs:
+  core:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Host semantic navigation self-test
+        working-directory: screenreader/uefi
+        run: |
+          set -euo pipefail
+          cc -std=c11 -O2 -Wall -Wextra -Werror             sr_core.c sr_keymap.c sr_selftest.c             -o sr-selftest
+          ./sr-selftest | tee core-proof.txt
+          grep -F 'UEFI_SCREENREADER_CORE=PASS' core-proof.txt
+
+      - name: Host voice streaming self-test
+        working-directory: screenreader/uefi
+        run: |
+          set -euo pipefail
+          cc -std=c11 -O2 -Wall -Wextra -Werror             sr_voice_stream.c sr_voice_selftest.c             -o sr-voice-selftest
+          ./sr-voice-selftest | tee voice-proof.txt
+          grep -F 'UEFI_VOICE_STREAM=PASS' voice-proof.txt
+
+      - name: Host HII IFR parser self-test
+        working-directory: screenreader/uefi
+        run: |
+          set -euo pipefail
+          cc -std=c11 -O2 -Wall -Wextra -Werror             sr_hii_ifr.c sr_hii_selftest.c             -o sr-hii-selftest
+          ./sr-hii-selftest | tee hii-proof.txt
+          grep -F 'UEFI_HII_IFR_MODEL=PASS' hii-proof.txt
+
+      - name: Freestanding x64 compile
+        working-directory: screenreader/uefi
+        run: |
+          set -euo pipefail
+          flags='--target=x86_64-pc-windows-msvc -std=c11 -ffreestanding -fshort-wchar -fno-stack-protector -fno-builtin -mno-red-zone -O2 -Wall -Wextra -Werror'
+          clang $flags -c sr_core.c -o sr_core.obj
+          clang $flags -c sr_keymap.c -o sr_keymap.obj
+          clang $flags -c sr_voice_stream.c -o sr_voice_stream.obj
+          clang $flags -c sr_hii_ifr.c -o sr_hii_ifr.obj
+          test -s sr_core.obj
+          test -s sr_voice_stream.obj
+          test -s sr_hii_ifr.obj
+          echo UEFI_FREESTANDING_OBJECTS=PASS
+
+      - name: Upload proofs
+        uses: actions/upload-artifact@v4
+        with:
+          name: uefi-screenreader-zero-proof
+          path: |
+            screenreader/uefi/*-proof.txt
+            screenreader/uefi/*.obj
+          if-no-files-found: error
