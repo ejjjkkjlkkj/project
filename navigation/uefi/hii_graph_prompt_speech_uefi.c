@@ -3721,18 +3721,56 @@ static int wait_navigation_keys(void *system_table) {
                 nav_prompt_load(next);
                 speak = 1;
             } else if (key.scan_code == 0x0004u) {
-                /* EFI_SCAN_LEFT: previous focus alias. */
                 marker("HII_GRAPH_NAV_KEY=LEFT");
-                u8 next = g_nav_prompt_index ? (u8)(g_nav_prompt_index - 1u)
-                                             : (u8)(g_nav_prompt_total - 1u);
-                nav_prompt_load(next);
+                u8 op = g_nav_prompt_opcodes[g_nav_prompt_index];
+                if (op == 0x05u &&
+                    nav_stage_cycle_oneof(system_table, g_nav_prompt_index, -1)) {
+                    marker("HII_GRAPH_NAV_LEFT_RIGHT_EDIT=PASS");
+                    marker("HII_GRAPH_NAV_ARROW_CHOICE=PASS");
+                    if (g_nav_m1603qa_308_profile) {
+                        if (!nav_refresh_current_form(system_table)) return 0;
+                        marker("HII_GRAPH_NAV_STAGED_DEPENDENCY_REFRESH=PASS");
+                    }
+                } else if (op == 0x07u &&
+                           nav_stage_adjust_numeric(system_table, g_nav_prompt_index, -1)) {
+                    marker("HII_GRAPH_NAV_LEFT_RIGHT_EDIT=PASS");
+                    marker("HII_GRAPH_NAV_ARROW_NUMERIC=PASS");
+                    if (g_nav_m1603qa_308_profile) {
+                        if (!nav_refresh_current_form(system_table)) return 0;
+                        marker("HII_GRAPH_NAV_STAGED_DEPENDENCY_REFRESH=PASS");
+                    }
+                } else {
+                    u8 next = g_nav_prompt_index ? (u8)(g_nav_prompt_index - 1u)
+                                                 : (u8)(g_nav_prompt_total - 1u);
+                    nav_prompt_load(next);
+                    marker("HII_GRAPH_NAV_LEFT_FALLBACK_MOVE=PASS");
+                }
                 speak = 1;
             } else if (key.scan_code == 0x0003u) {
-                /* EFI_SCAN_RIGHT: next focus alias. */
                 marker("HII_GRAPH_NAV_KEY=RIGHT");
-                u8 next = (u8)(g_nav_prompt_index + 1u);
-                if (next >= g_nav_prompt_total) next = 0;
-                nav_prompt_load(next);
+                u8 op = g_nav_prompt_opcodes[g_nav_prompt_index];
+                if (op == 0x05u &&
+                    nav_stage_cycle_oneof(system_table, g_nav_prompt_index, 1)) {
+                    marker("HII_GRAPH_NAV_LEFT_RIGHT_EDIT=PASS");
+                    marker("HII_GRAPH_NAV_ARROW_CHOICE=PASS");
+                    if (g_nav_m1603qa_308_profile) {
+                        if (!nav_refresh_current_form(system_table)) return 0;
+                        marker("HII_GRAPH_NAV_STAGED_DEPENDENCY_REFRESH=PASS");
+                    }
+                } else if (op == 0x07u &&
+                           nav_stage_adjust_numeric(system_table, g_nav_prompt_index, 1)) {
+                    marker("HII_GRAPH_NAV_LEFT_RIGHT_EDIT=PASS");
+                    marker("HII_GRAPH_NAV_ARROW_NUMERIC=PASS");
+                    if (g_nav_m1603qa_308_profile) {
+                        if (!nav_refresh_current_form(system_table)) return 0;
+                        marker("HII_GRAPH_NAV_STAGED_DEPENDENCY_REFRESH=PASS");
+                    }
+                } else {
+                    u8 next = (u8)(g_nav_prompt_index + 1u);
+                    if (next >= g_nav_prompt_total) next = 0;
+                    nav_prompt_load(next);
+                    marker("HII_GRAPH_NAV_RIGHT_FALLBACK_MOVE=PASS");
+                }
                 speak = 1;
             } else if (key.unicode_char == 0x0009u) {
                 /* Tab advances focus without changing firmware values. */
@@ -3782,8 +3820,8 @@ static int wait_navigation_keys(void *system_table) {
                         speech_text = g_nav_help_text;
                         speech_length = g_nav_help_length;
                     } else {
-                        speech_text = "arrows move tab next enter action space toggle escape back";
-                        speech_length = 58u;
+                        speech_text = "up down move left right change enter action escape back f1 help";
+                        speech_length = 63u;
                         marker("HII_GRAPH_NAV_BUILTIN_HELP=PASS");
                     }
                 }
