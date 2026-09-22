@@ -144,6 +144,8 @@ def main():
         raise SystemExit('usage: generate_units.py OUTPUT_C METADATA')
     out=Path(sys.argv[1]); meta=Path(sys.argv[2])
     speech=load_source()
+    if speech.SAMPLE_RATE < 16000:
+        raise SystemExit(f'UEFI speech source rate too low for intelligibility: {speech.SAMPLE_RATE}')
     names=sorted(
         {'sil'}
         | {u for seq in LETTER_UNITS.values() for u in seq}
@@ -226,9 +228,11 @@ def main():
         f'word-lexicon-count={len(word_names)}\n'
         f'word-name-stride={WORD_NAME_STRIDE}\n'
         f'word-unit-stride={WORD_UNIT_STRIDE}\n'
-        'inter-letter-silence-ms=12-runtime-gap\n'
-        'word-silence-ms=65\n'
-        'speech-mode=hybrid-word-allophone-fr-v4\n'
+        'source-sample-rate-hz='+str(speech.SAMPLE_RATE)+'\n'
+        'inter-letter-silence-ms=18-runtime-gap\n'
+        'intra-word-phoneme-silence-ms=0\n'
+        'word-silence-ms=70\n'
+        'speech-mode=hybrid-word-formant-fr-v5\n'
         'full-utterance-asset=false\n'
     )
     print('HII_GRAPH_PROMPT_UNIT_GENERATION=PASS')
