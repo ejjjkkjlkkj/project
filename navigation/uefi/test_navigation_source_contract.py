@@ -114,6 +114,7 @@ required = (
     'key.unicode_char == 0x0020u',
     'nav_build_position_speech',
     'nav_append_decimal',
+    'nav_append_u64_decimal',
     "key.unicode_char == (u16)'p'",
     'HII_GRAPH_NAV_WHERE_AM_I=PASS',
     'HII_GRAPH_NAV_WHERE_AM_I_CONTEXT=PASS',
