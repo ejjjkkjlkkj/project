@@ -43,6 +43,7 @@ required = (
     'HII_GRAPH_NAV_FORM_BACK=PASS',
     'HII_GRAPH_NAV_FORM_TITLE_SPEECH=PASS',
     'HII_GRAPH_NAV_READ_ONLY_ACTION=BLOCKED',
+    'HII_GRAPH_NAV_SELF_REF_ACTION=BLOCKED',
     'g_m1603qa_308_setup_package_list_guid',
     'guid_bytes_equal',
     'nav_package_is_setup',
