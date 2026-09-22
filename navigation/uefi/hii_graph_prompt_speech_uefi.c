@@ -1181,6 +1181,11 @@ static const char *ifr_semantic_role(u8 op) {
 #define NAV_COND_GRAY     0x02u
 #define NAV_COND_DISABLE  0x04u
 #define NAV_COND_UNKNOWN  0x80u
+#define NAV_Q_READ_ONLY          0x01u
+#define NAV_Q_CALLBACK           0x04u
+#define NAV_Q_RESET_REQUIRED     0x10u
+#define NAV_Q_RECONNECT_REQUIRED 0x40u
+#define NAV_Q_OPTIONS_ONLY       0x80u
 
 static u8 ifr_condition_flag(u8 op) {
     switch (op) {
@@ -1411,6 +1416,10 @@ static int nav_stage_set(u8 prompt_index, u64 value) {
         !g_nav_prompt_question_ids[prompt_index]) return 0;
     if (g_nav_prompt_condition_flags[prompt_index] &
         (NAV_COND_GRAY | NAV_COND_UNKNOWN)) return 0;
+    if (g_nav_prompt_question_flags[prompt_index] & NAV_Q_READ_ONLY) {
+        marker("HII_GRAPH_NAV_READ_ONLY_PREVIEW=BLOCKED");
+        return 0;
+    }
     if (g_nav_prompt_opcodes[prompt_index] != 0x05u &&
         g_nav_prompt_opcodes[prompt_index] != 0x06u) return 0;
 
@@ -1467,6 +1476,29 @@ static int nav_effective_scalar_value(void *system_table, u8 prompt_index,
 
 static u8 nav_append_decimal(char *out, u8 n, u8 cap, u32 value);
 
+static u8 nav_append_text(char *out, u8 n, u8 cap, const char *text) {
+    if (!out || !text) return n;
+    while (*text && n < cap) out[n++] = *text++;
+    return n;
+}
+
+static u8 nav_append_question_flags(u8 prompt_index, char *out, u8 n, u8 cap) {
+    if (!out || prompt_index >= g_nav_prompt_total || n >= cap) return n;
+    u8 flags = g_nav_prompt_question_flags[prompt_index];
+    const char *items[5];
+    u8 count = 0u;
+    if (flags & NAV_Q_READ_ONLY) items[count++] = "read only";
+    if (flags & NAV_Q_CALLBACK) items[count++] = "callback";
+    if (flags & NAV_Q_RESET_REQUIRED) items[count++] = "reset required";
+    if (flags & NAV_Q_RECONNECT_REQUIRED) items[count++] = "reconnect required";
+    if (flags & NAV_Q_OPTIONS_ONLY) items[count++] = "options only";
+    for (u8 i = 0u; i < count && n < cap; ++i) {
+        if (n) out[n++] = ' ';
+        n = nav_append_text(out, n, cap, items[i]);
+    }
+    return n;
+}
+
 static int nav_build_control_detail_speech(u8 prompt_index,
                                            char *out, u8 *length_out) {
     if (!out || !length_out || prompt_index >= g_nav_prompt_total) return 0;
@@ -1476,11 +1508,13 @@ static int nav_build_control_detail_speech(u8 prompt_index,
     if (op == 0x08u) { /* Never expose password storage or contents. */
         static const char protected_text[] = "protected";
         while (protected_text[n] && n < 32u) { out[n] = protected_text[n]; ++n; }
+        n = nav_append_question_flags(prompt_index, out, n, 32u);
         out[n] = 0;
         *length_out = n;
         return 1;
     }
-    if (!g_nav_prompt_meta_valid[prompt_index]) return 0;
+    if (!g_nav_prompt_meta_valid[prompt_index] &&
+        !g_nav_prompt_question_flags[prompt_index]) return 0;
 
     if (op == 0x05u || op == 0x07u) {
         static const char min_text[] = "min ";
@@ -1514,10 +1548,11 @@ static int nav_build_control_detail_speech(u8 prompt_index,
         const char *text = storage == 0x10u ? "system clock" :
                            storage == 0x20u ? "wakeup clock" : "stored value";
         while (*text && n < 32u) out[n++] = *text++;
-    } else {
+    } else if (!g_nav_prompt_question_flags[prompt_index]) {
         return 0;
     }
 
+    n = nav_append_question_flags(prompt_index, out, n, 32u);
     out[n] = 0;
     *length_out = n;
     return n != 0u;
@@ -1744,6 +1779,8 @@ static int nav_build_focus_speech(void *system_table, u8 prompt_index,
         state = " disabled";
     else if (g_nav_prompt_condition_flags[prompt_index] & NAV_COND_UNKNOWN)
         state = " conditional";
+    else if (g_nav_prompt_question_flags[prompt_index] & NAV_Q_READ_ONLY)
+        state = " read only";
     else if (staged)
         state = " preview";
     if (state) while (*state && n < budget) out[n++] = *state++;
@@ -2219,6 +2256,8 @@ static void nav_prompt_load(u8 index) {
         state = " disabled";
     else if (g_nav_prompt_condition_flags[index] & NAV_COND_UNKNOWN)
         state = " conditional";
+    else if (g_nav_prompt_question_flags[index] & NAV_Q_READ_ONLY)
+        state = " read only";
     if (state) {
         while (*state && n < 32u) g_nav_speech_text[n++] = *state++;
     }
@@ -3091,6 +3130,8 @@ static int wait_navigation_keys(void *system_table) {
     marker("HII_GRAPH_NAV_STAGED_EDIT_MODE=PASS");
     marker("HII_GRAPH_NAV_STAGED_NUMERIC_MODE=PASS");
     marker("HII_GRAPH_NAV_SPECIALIZED_METADATA=PASS");
+    marker("HII_GRAPH_NAV_QUESTION_FLAGS_SEMANTICS=PASS");
+    marker("HII_GRAPH_NAV_CALLBACK_AWARE=PASS");
     marker("HII_GRAPH_NAV_PASSWORD_PRIVACY=PASS");
     marker("HII_GRAPH_NAV_STAGED_CONDITION_EVAL=PASS");
     marker("HII_GRAPH_NAV_NO_FIRMWARE_WRITE=PASS");
