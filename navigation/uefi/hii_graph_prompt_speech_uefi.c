@@ -3271,6 +3271,10 @@ static int wait_navigation_keys(void *system_table) {
                                           direction)) {
                     marker("HII_GRAPH_NAV_STAGED_ONEOF=PASS");
                     marker("HII_GRAPH_NAV_STAGED_EDIT=PASS");
+                    if (g_nav_m1603qa_308_profile) {
+                        if (!nav_refresh_current_form(system_table)) return 0;
+                        marker("HII_GRAPH_NAV_STAGED_DEPENDENCY_REFRESH=PASS");
+                    }
                     speak = 1;
                 } else {
                     speech_override = "not editable";
@@ -3283,6 +3287,10 @@ static int wait_navigation_keys(void *system_table) {
                 if (nav_stage_toggle_checkbox(system_table, g_nav_prompt_index)) {
                     marker("HII_GRAPH_NAV_STAGED_CHECKBOX=PASS");
                     marker("HII_GRAPH_NAV_STAGED_EDIT=PASS");
+                    if (g_nav_m1603qa_308_profile) {
+                        if (!nav_refresh_current_form(system_table)) return 0;
+                        marker("HII_GRAPH_NAV_STAGED_DEPENDENCY_REFRESH=PASS");
+                    }
                     speak = 1;
                 } else {
                     speech_override = "not editable";
@@ -3311,6 +3319,10 @@ static int wait_navigation_keys(void *system_table) {
                                              direction)) {
                     marker("HII_GRAPH_NAV_STAGED_NUMERIC=PASS");
                     marker("HII_GRAPH_NAV_STAGED_EDIT=PASS");
+                    if (g_nav_m1603qa_308_profile) {
+                        if (!nav_refresh_current_form(system_table)) return 0;
+                        marker("HII_GRAPH_NAV_STAGED_DEPENDENCY_REFRESH=PASS");
+                    }
                     speak = 1;
                 } else {
                     speech_override = "not editable";
