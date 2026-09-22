@@ -127,45 +127,44 @@ static const sr_voice_unit *v_longest_prefix(const sr_voice_stream *voice,
 }
 
 static const sr_voice_unit *v_next_unit(sr_voice_stream *voice) {
-    const sr_voice_unit *unit;
-    sr_u32 consumed = 0;
+    for (;;) {
+        const sr_voice_unit *unit;
+        sr_u32 consumed = 0;
 
-    while (voice->text_pos < voice->text_len &&
-           v_is_space(voice->text[voice->text_pos])) {
-        voice->text_pos++;
-    }
-    if (voice->text_pos >= voice->text_len) return 0;
+        while (voice->text_pos < voice->text_len &&
+               v_is_space(voice->text[voice->text_pos])) {
+            voice->text_pos++;
+        }
+        if (voice->text_pos >= voice->text_len) return 0;
 
-    unit = v_longest_prefix(voice, &voice->text[voice->text_pos], &consumed);
-    if (unit) {
-        voice->text_pos += consumed;
-        voice->started_units++;
-        return unit;
-    }
+        unit = v_longest_prefix(voice, &voice->text[voice->text_pos], &consumed);
+        if (unit) {
+            voice->text_pos += consumed;
+            voice->started_units++;
+            return unit;
+        }
 
-    {
-        sr_u32 advance = 0;
-        char folded = v_fold_french(&voice->text[voice->text_pos], &advance);
-        if (!advance) advance = 1;
-        voice->text_pos += advance;
-        if (folded) {
-            unit = v_find_exact(voice->bank, &folded, 1u);
-            if (unit) {
-                voice->started_units++;
-                voice->fallback_units++;
-                return unit;
+        {
+            sr_u32 advance = 0;
+            char folded = v_fold_french(&voice->text[voice->text_pos], &advance);
+            if (!advance) advance = 1;
+            voice->text_pos += advance;
+            if (folded) {
+                unit = v_find_exact(voice->bank, &folded, 1u);
+                if (unit) {
+                    voice->started_units++;
+                    voice->fallback_units++;
+                    return unit;
+                }
             }
         }
+
+        /*
+         * Unsupported code points are skipped iteratively. This guarantees
+         * forward progress without recursive stack growth in firmware.
+         */
+        voice->fallback_units++;
     }
-
-    voice->fallback_units++;
-
-    /*
-     * Unsupported code points are skipped iteratively by the caller's next
-     * pump. Avoid recursive fallback so malformed firmware strings cannot
-     * grow the pre-OS stack.
-     */
-    return 0;
 }
 
 static int v_begin(void *ctx, sr_u32 token, sr_speech_priority priority) {
