@@ -1866,6 +1866,15 @@ static int wait_navigation_keys(void *system_table) {
                 serial_puts("HII_GRAPH_NAV_ROLE=");
                 serial_puts(ifr_semantic_role(g_nav_prompt_opcode));
                 serial_puts("\r\n");
+                serial_puts("HII_GRAPH_NAV_FORM_ID=0x");
+                serial_hex32((u32)g_nav_prompt_form_ids[g_nav_prompt_index]);
+                serial_puts("\r\n");
+                serial_puts("HII_GRAPH_NAV_QUESTION_ID=0x");
+                serial_hex32((u32)g_nav_prompt_question_ids[g_nav_prompt_index]);
+                serial_puts("\r\n");
+                serial_puts("HII_GRAPH_NAV_CONDITION_FLAGS=0x");
+                serial_hex8(g_nav_prompt_condition_flags[g_nav_prompt_index]);
+                serial_puts("\r\n");
                 serial_puts("HII_GRAPH_NAV_SPEECH_TEXT=");
                 serial_puts(speech_text);
                 serial_puts("\r\n");
