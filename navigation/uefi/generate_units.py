@@ -4,7 +4,8 @@ import hashlib, importlib.util, struct, sys
 from pathlib import Path
 
 ROOT=Path(__file__).resolve().parents[2]
-SOURCE=ROOT/'voice'/'uefi_units'/'build_native_units.py'
+SOURCE=ROOT/'voice'/'v4'/'native_speech_v4.py'
+SOURCE_RATE=16000
 LETTER_UNITS={
  # Clear fallback spelling for arbitrary firmware labels. The previous map
  # treated each grapheme as a raw phoneme, which made unknown HII labels sound
@@ -144,6 +145,60 @@ WORD_UNITS={
  'wake':('w','e','k'),
 }
 
+# Preserve the compact pronunciation sequences, but render each complete
+# letter/digit/word through VoiceCore v4 before embedding it in firmware.
+# This keeps coarticulation/crossfades inside words instead of restarting the
+# oscillator/filter for every phoneme.
+PHONEME_LETTER_UNITS = LETTER_UNITS
+PHONEME_DIGIT_UNITS = DIGIT_UNITS
+PHONEME_WORD_UNITS = WORD_UNITS
+
+LETTER_UNITS = {ch:(f'letter_{ch}',) for ch in PHONEME_LETTER_UNITS}
+DIGIT_UNITS = {ch:(f'digit_{ch}',) for ch in PHONEME_DIGIT_UNITS}
+WORD_UNITS = {word:(f'word_{word}',) for word in PHONEME_WORD_UNITS}
+
+_V4_PHONEME = {
+    'eu':'ø',
+    'on':'ɔ̃',
+    'sh':'ʃ',
+    'zh':'ʒ',
+    'r':'ʁ',
+}
+
+def _render_sequence(speech, sequence):
+    mapped=[_V4_PHONEME.get(p,p) for p in sequence]
+    if not mapped:
+        return []
+    voice=speech.VOICES['screen']
+    out=[]
+    for idx,ph in enumerate(mapped):
+        if ph not in speech.PHONEMES:
+            raise SystemExit(f'VoiceCore v4 missing phoneme: {ph}')
+        seg=speech._segment(ph, voice, idx, len(mapped), '')
+        kind=speech.PHONEMES[ph].kind
+        out=speech._crossfade(out, seg, 2.0 if kind in {'p','s'} else 7.0)
+    return speech._finalize(out)
+
+def _to_u8_16k(samples):
+    # VoiceCore renders 48 kHz s16 mono. Average each 3-frame group into
+    # deterministic 16 kHz unsigned PCM for the compact firmware bank.
+    out=bytearray()
+    for i in range(0,len(samples)-2,3):
+        avg=(int(samples[i])+int(samples[i+1])+int(samples[i+2]))//3
+        q=128 + max(-128,min(127,avg//256))
+        out.append(q & 0xff)
+    return bytes(out)
+
+def make_source_units(speech):
+    units={'sil':bytes([128])*(SOURCE_RATE*70//1000)}
+    for ch,seq in PHONEME_LETTER_UNITS.items():
+        units[f'letter_{ch}']=_to_u8_16k(_render_sequence(speech,seq))
+    for ch,seq in PHONEME_DIGIT_UNITS.items():
+        units[f'digit_{ch}']=_to_u8_16k(_render_sequence(speech,seq))
+    for word,seq in PHONEME_WORD_UNITS.items():
+        units[f'word_{word}']=_to_u8_16k(_render_sequence(speech,seq))
+    return units
+
 WORD_NAME_STRIDE=16
 WORD_UNIT_STRIDE=24
 
@@ -186,20 +241,22 @@ def main():
         raise SystemExit('usage: generate_units.py OUTPUT_C METADATA')
     out=Path(sys.argv[1]); meta=Path(sys.argv[2])
     speech=load_source()
-    if speech.SAMPLE_RATE < 16000:
-        raise SystemExit(f'UEFI speech source rate too low for intelligibility: {speech.SAMPLE_RATE}')
+    if speech.SAMPLE_RATE != 48000:
+        raise SystemExit(f'VoiceCore v4 unexpected render rate: {speech.SAMPLE_RATE}')
     names=sorted(
         {'sil'}
         | {u for seq in LETTER_UNITS.values() for u in seq}
         | {u for seq in DIGIT_UNITS.values() for u in seq}
         | {u for seq in WORD_UNITS.values() for u in seq}
     )
-    source_units=speech.make_units()
-    converted={n:convert(source_units[n], speech.SAMPLE_RATE) for n in names}
+    source_units=make_source_units(speech)
+    # Keep compact 16 kHz u8 clips in the EFI image. The firmware expands
+    # them to 48 kHz signed-16 stereo while building each DMA utterance.
+    converted={n:source_units[n] for n in names}
     offsets=[]; lengths=[]; bank=bytearray()
     for n in names:
         offsets.append(len(bank)); lengths.append(len(converted[n])); bank += converted[n]
-    if len(bank) > 128*4096-0x1000:
+    if len(bank) > 1024*1024:
         raise SystemExit(f'unit bank too large: {len(bank)}')
     index={n:i for i,n in enumerate(names)}
     counts=[]; flat=[]
@@ -240,6 +297,7 @@ def main():
         f'const unsigned int qev_unit_bank_len = {len(bank)}u;\n',
         arr_u32('qev_unit_off',offsets),
         arr_u32('qev_unit_len',lengths),
+        f'const unsigned int qev_unit_source_rate = {SOURCE_RATE}u;\n',
         f'const unsigned int qev_unit_count = {len(names)}u;\n',
         f'const unsigned int qev_sil_unit_index = {index["sil"]}u;\n',
         arr_u8('qev_letter_unit_count',counts),
@@ -257,7 +315,7 @@ def main():
     out.write_text('\n'.join(lines))
     meta.write_text(
         'OS-UEFI-HII-GRAPH-PROMPT-SPEECH-UNITS-V1\n'
-        'source=voice/uefi_units/build_native_units.py\n'
+        'source=voice/v4/native_speech_v4.py\n'
         f'source-sha256={hashlib.sha256(SOURCE.read_bytes()).hexdigest()}\n'
         f'unit-names={",".join(names)}\n'
         f'unit-count={len(names)}\n'
@@ -270,11 +328,11 @@ def main():
         f'word-lexicon-count={len(word_names)}\n'
         f'word-name-stride={WORD_NAME_STRIDE}\n'
         f'word-unit-stride={WORD_UNIT_STRIDE}\n'
-        'source-sample-rate-hz='+str(speech.SAMPLE_RATE)+'\n'
+        'source-sample-rate-hz='+str(SOURCE_RATE)+'\n'
         'inter-letter-silence-ms=18-runtime-gap\n'
         'intra-word-phoneme-silence-ms=0\n'
         'word-silence-ms=70\n'
-        'speech-mode=hybrid-word-formant-fr-v5\n'
+        'speech-mode=whole-clip-voicecore-v4-uefi-v6\n'
         'full-utterance-asset=false\n'
     )
     print('HII_GRAPH_PROMPT_UNIT_GENERATION=PASS')
