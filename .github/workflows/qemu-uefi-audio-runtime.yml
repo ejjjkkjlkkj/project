@@ -60,12 +60,20 @@ jobs:
       - name: Locate OVMF firmware
         run: |
           set -euo pipefail
-          OVMF_CODE="$(dpkg -L ovmf | grep -E '/OVMF_CODE\.fd$' | head -n1)"
-          OVMF_VARS="$(dpkg -L ovmf | grep -E '/OVMF_VARS\.fd$' | head -n1)"
-          test -n "$OVMF_CODE"
-          test -n "$OVMF_VARS"
+          if [ -f /usr/share/OVMF/OVMF_CODE_4M.fd ] && [ -f /usr/share/OVMF/OVMF_VARS_4M.fd ]; then
+            OVMF_CODE=/usr/share/OVMF/OVMF_CODE_4M.fd
+            OVMF_VARS=/usr/share/OVMF/OVMF_VARS_4M.fd
+          elif [ -f /usr/share/OVMF/OVMF_CODE.fd ] && [ -f /usr/share/OVMF/OVMF_VARS.fd ]; then
+            OVMF_CODE=/usr/share/OVMF/OVMF_CODE.fd
+            OVMF_VARS=/usr/share/OVMF/OVMF_VARS.fd
+          else
+            echo "No matched OVMF CODE/VARS pair found" >&2
+            dpkg -L ovmf >&2
+            exit 1
+          fi
           cp "$OVMF_VARS" build/OVMF_VARS.fd
           echo "OVMF_CODE=$OVMF_CODE" >> "$GITHUB_ENV"
+          echo "OVMF_LAYOUT=$(basename "$OVMF_CODE")"
           echo OVMF=PASS
 
       - name: Boot real UEFI payload and capture HDA WAV
