@@ -30,6 +30,7 @@ def converted_units() -> dict[str, bytes]:
         | {u for seq in gu.LETTER_UNITS.values() for u in seq}
         | {u for seq in gu.DIGIT_UNITS.values() for u in seq}
         | {u for seq in gu.WORD_UNITS.values() for u in seq}
+        | {gu._phrase_unit_name(i) for i in range(len(gu.PHRASE_TEXTS))}
     )
     source_units = gu.make_source_units(speech)
     return {
@@ -44,6 +45,12 @@ def render_runtime_pcm(text: str) -> bytes:
 
     units = converted_units()
     pcm = bytearray(LEAD_SILENCE_BYTES)
+    if text in gu.PHRASE_TEXTS:
+        pcm += units[gu._phrase_unit_name(gu.PHRASE_TEXTS.index(text))]
+        pcm += bytes(TAIL_SILENCE_BYTES)
+        padded = (len(pcm) + 127) & ~127
+        pcm += bytes(padded - len(pcm))
+        return bytes(pcm)
     i = 0
     while i < len(text):
         ch = text[i]
