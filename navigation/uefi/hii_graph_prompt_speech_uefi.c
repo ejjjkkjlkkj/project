@@ -1032,6 +1032,46 @@ static const char *ifr_semantic_role(u8 op) {
         default: return "control";
     }
 }
+
+#define NAV_GROUP_BUTTON   1u
+#define NAV_GROUP_CHECKBOX 2u
+#define NAV_GROUP_CHOICE   3u
+#define NAV_GROUP_EDITABLE 4u
+
+/*
+ * Structural navigation inspired by mature screen-reader interaction models,
+ * implemented from scratch for native HII. Lowercase moves forward and
+ * uppercase moves backward; no desktop accessibility runtime is imported.
+ */
+static int nav_role_in_group(u8 opcode, u8 group) {
+    switch (group) {
+        case NAV_GROUP_BUTTON: return opcode == 0x0cu;
+        case NAV_GROUP_CHECKBOX: return opcode == 0x06u;
+        case NAV_GROUP_CHOICE: return opcode == 0x05u || opcode == 0x23u;
+        case NAV_GROUP_EDITABLE:
+            return opcode == 0x07u || opcode == 0x08u || opcode == 0x1au ||
+                   opcode == 0x1bu || opcode == 0x1cu;
+        default: return 0;
+    }
+}
+
+static int nav_find_group(u8 group, int direction, u8 *index_out) {
+    if (!index_out || g_nav_prompt_total < 2u) return 0;
+    u8 index = g_nav_prompt_index;
+    for (u8 visited = 1u; visited < g_nav_prompt_total; ++visited) {
+        if (direction < 0) {
+            index = index ? (u8)(index - 1u) : (u8)(g_nav_prompt_total - 1u);
+        } else {
+            index = (u8)(index + 1u);
+            if (index >= g_nav_prompt_total) index = 0u;
+        }
+        if (nav_role_in_group(g_nav_prompt_opcodes[index], group)) {
+            *index_out = index;
+            return 1;
+        }
+    }
+    return 0;
+}
 #endif
 static u16 fold_prompt_char(u16 ch) {
     if (ch >= (u16)'A' && ch <= (u16)'Z') return (u16)(ch + 32u);
@@ -1512,6 +1552,8 @@ static int wait_navigation_keys(void *system_table) {
     marker("HII_GRAPH_NAV_REALTIME_MODE=INTERRUPTIBLE_DMA");
     marker("HII_GRAPH_NAV_DIRECTIONAL_ALIASES=PASS");
     marker("HII_GRAPH_NAV_TAB_FORWARD=PASS");
+    marker("HII_GRAPH_NAV_STRUCTURAL_KEYS=PASS");
+    marker("HII_GRAPH_NAV_WHERE_AM_I_KEY=PASS");
     serial_puts("HII_GRAPH_NAV_TOTAL=0x");
     serial_hex8(g_nav_prompt_total);
     serial_puts("\r\n");
@@ -1525,6 +1567,8 @@ static int wait_navigation_keys(void *system_table) {
         if (st == 0) {
             u8 speak = 0;
             u8 speak_help = 0;
+            const char *speech_override = 0;
+            u8 speech_override_length = 0;
             if (key.unicode_char == 0x001bu || key.scan_code == 0x0017u) {
                 marker("HII_GRAPH_NAV_KEY=ESC");
                 speech_dma_stop();
@@ -1538,7 +1582,63 @@ static int wait_navigation_keys(void *system_table) {
                 marker("HII_GRAPH_NAV_EXIT=PASS");
                 return 1;
             }
-            if (key.unicode_char == (u16)'h' || key.unicode_char == (u16)'H') {
+            if (key.unicode_char == (u16)'w' || key.unicode_char == (u16)'W') {
+                marker("HII_GRAPH_NAV_KEY=W");
+                marker("HII_GRAPH_NAV_WHERE_AM_I=PASS");
+                speak = 1;
+            } else if (key.unicode_char == (u16)'b' || key.unicode_char == (u16)'B') {
+                marker("HII_GRAPH_NAV_KEY=STRUCTURAL_BUTTON");
+                u8 next = 0;
+                int direction = key.unicode_char == (u16)'B' ? -1 : 1;
+                if (nav_find_group(NAV_GROUP_BUTTON, direction, &next)) {
+                    nav_prompt_load(next);
+                    marker("HII_GRAPH_NAV_STRUCTURAL_BUTTON=PASS");
+                } else {
+                    speech_override = "no button";
+                    speech_override_length = 9u;
+                    marker("HII_GRAPH_NAV_STRUCTURAL_BUTTON=NOT_FOUND");
+                }
+                speak = 1;
+            } else if (key.unicode_char == (u16)'x' || key.unicode_char == (u16)'X') {
+                marker("HII_GRAPH_NAV_KEY=STRUCTURAL_CHECKBOX");
+                u8 next = 0;
+                int direction = key.unicode_char == (u16)'X' ? -1 : 1;
+                if (nav_find_group(NAV_GROUP_CHECKBOX, direction, &next)) {
+                    nav_prompt_load(next);
+                    marker("HII_GRAPH_NAV_STRUCTURAL_CHECKBOX=PASS");
+                } else {
+                    speech_override = "no checkbox";
+                    speech_override_length = 11u;
+                    marker("HII_GRAPH_NAV_STRUCTURAL_CHECKBOX=NOT_FOUND");
+                }
+                speak = 1;
+            } else if (key.unicode_char == (u16)'c' || key.unicode_char == (u16)'C') {
+                marker("HII_GRAPH_NAV_KEY=STRUCTURAL_CHOICE");
+                u8 next = 0;
+                int direction = key.unicode_char == (u16)'C' ? -1 : 1;
+                if (nav_find_group(NAV_GROUP_CHOICE, direction, &next)) {
+                    nav_prompt_load(next);
+                    marker("HII_GRAPH_NAV_STRUCTURAL_CHOICE=PASS");
+                } else {
+                    speech_override = "no choice";
+                    speech_override_length = 9u;
+                    marker("HII_GRAPH_NAV_STRUCTURAL_CHOICE=NOT_FOUND");
+                }
+                speak = 1;
+            } else if (key.unicode_char == (u16)'e' || key.unicode_char == (u16)'E') {
+                marker("HII_GRAPH_NAV_KEY=STRUCTURAL_EDITABLE");
+                u8 next = 0;
+                int direction = key.unicode_char == (u16)'E' ? -1 : 1;
+                if (nav_find_group(NAV_GROUP_EDITABLE, direction, &next)) {
+                    nav_prompt_load(next);
+                    marker("HII_GRAPH_NAV_STRUCTURAL_EDITABLE=PASS");
+                } else {
+                    speech_override = "no editable";
+                    speech_override_length = 11u;
+                    marker("HII_GRAPH_NAV_STRUCTURAL_EDITABLE=NOT_FOUND");
+                }
+                speak = 1;
+            } else if (key.unicode_char == (u16)'h' || key.unicode_char == (u16)'H') {
                 marker("HII_GRAPH_NAV_KEY=H");
                 speak = 1;
                 speak_help = 1;
@@ -1607,8 +1707,8 @@ static int wait_navigation_keys(void *system_table) {
             }
 
             if (speak) {
-                const char *speech_text = g_nav_speech_text;
-                u8 speech_length = g_nav_speech_length;
+                const char *speech_text = speech_override ? speech_override : g_nav_speech_text;
+                u8 speech_length = speech_override ? speech_override_length : g_nav_speech_length;
                 if (speak_help) {
                     if (g_nav_help_length) {
                         speech_text = g_nav_help_text;
