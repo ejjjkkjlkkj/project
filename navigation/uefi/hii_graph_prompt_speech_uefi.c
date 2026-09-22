@@ -1627,7 +1627,10 @@ static int nav_stage_set(u8 prompt_index, u64 value) {
     if (prompt_index >= g_nav_prompt_total ||
         !g_nav_prompt_question_ids[prompt_index]) return 0;
     if (g_nav_prompt_condition_flags[prompt_index] &
-        (NAV_COND_GRAY | NAV_COND_UNKNOWN)) return 0;
+        (NAV_COND_GRAY | NAV_COND_DISABLE | NAV_COND_UNKNOWN)) {
+        marker("HII_GRAPH_NAV_DISABLED_PREVIEW=BLOCKED");
+        return 0;
+    }
     if (g_nav_prompt_question_flags[prompt_index] & NAV_Q_READ_ONLY) {
         marker("HII_GRAPH_NAV_READ_ONLY_PREVIEW=BLOCKED");
         return 0;
@@ -1815,7 +1818,7 @@ static int nav_stage_cycle_oneof(void *system_table, u8 prompt_index,
     if (!system_table || prompt_index >= g_nav_prompt_total ||
         g_nav_prompt_opcodes[prompt_index] != 0x05u ||
         (g_nav_prompt_condition_flags[prompt_index] &
-         (NAV_COND_GRAY | NAV_COND_UNKNOWN))) return 0;
+         (NAV_COND_GRAY | NAV_COND_DISABLE | NAV_COND_UNKNOWN))) return 0;
     u8 count = g_nav_option_counts[prompt_index];
     if (!count) return 0;
     u64 current = 0u;
@@ -1843,7 +1846,7 @@ static int nav_stage_toggle_checkbox(void *system_table, u8 prompt_index) {
     if (!system_table || prompt_index >= g_nav_prompt_total ||
         g_nav_prompt_opcodes[prompt_index] != 0x06u ||
         (g_nav_prompt_condition_flags[prompt_index] &
-         (NAV_COND_GRAY | NAV_COND_UNKNOWN))) return 0;
+         (NAV_COND_GRAY | NAV_COND_DISABLE | NAV_COND_UNKNOWN))) return 0;
     u64 current = 0u;
     u8 staged = 0u;
     if (!nav_effective_scalar_value(system_table, prompt_index,
@@ -1857,7 +1860,7 @@ static int nav_stage_adjust_numeric(void *system_table, u8 prompt_index,
         g_nav_prompt_opcodes[prompt_index] != 0x07u ||
         !g_nav_prompt_meta_valid[prompt_index] ||
         (g_nav_prompt_condition_flags[prompt_index] &
-         (NAV_COND_GRAY | NAV_COND_UNKNOWN))) return 0;
+         (NAV_COND_GRAY | NAV_COND_DISABLE | NAV_COND_UNKNOWN))) return 0;
     u64 step = g_nav_prompt_step_value[prompt_index];
     u64 minv = g_nav_prompt_min_value[prompt_index];
     u64 maxv = g_nav_prompt_max_value[prompt_index];
@@ -3415,7 +3418,7 @@ static int wait_navigation_keys(void *system_table) {
                 marker("HII_GRAPH_NAV_KEY=ENTER");
                 u8 current_condition = g_nav_prompt_condition_flags[g_nav_prompt_index];
                 u16 target = g_nav_ref_form_ids[g_nav_prompt_index];
-                if (current_condition & NAV_COND_GRAY) {
+                if (current_condition & (NAV_COND_GRAY | NAV_COND_DISABLE)) {
                     marker("HII_GRAPH_NAV_DISABLED_ACTION=BLOCKED");
                     speech_override = "disabled";
                     speech_override_length = 8u;
