@@ -30,6 +30,7 @@ required = (
     'speech_append_pcm8_16k',
     'HII_GRAPH_SPEECH_WHOLE_WORD_CLIP=PASS',
     'HII_GRAPH_SPEECH_VOICECORE_WORD_MODE=PASS',
+    'HII_GRAPH_SPEECH_SHORT_CLIP_TIMEOUT_FLOOR=PASS',
     'phoneme_gap_bytes = 0u',
     'grapheme_gap_bytes = 18u * 192u',
     'HII_GRAPH_SPEECH_CONTINUOUS_PHONEMES=PASS',
