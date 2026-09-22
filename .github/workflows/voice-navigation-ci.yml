@@ -40,6 +40,7 @@ jobs:
           (cd navigation/uefi && python test_generate_units.py)
           (cd navigation/uefi && python test_navigation_source_contract.py)
           (cd navigation/uefi && python test_m1603qa_308_baseline.py)
+          (cd navigation/uefi && python test_m1603qa_308_baseline.py)
           python navigation/uefi/generate_units.py build/navigation_units.c build/navigation_units.txt
           grep -F 'source=voice/uefi_units/build_native_units.py' build/navigation_units.txt
           grep -F 'speech-mode=clear-lettername-spelling-fr-v3' build/navigation_units.txt
@@ -64,6 +65,11 @@ jobs:
           grep -aF 'HII_GRAPH_NAV_TAB_FORWARD=PASS' build/NAVIGATION.EFI
           grep -aF 'HII_GRAPH_NAV_SPEECH_INTERRUPT=PASS' build/NAVIGATION.EFI
           grep -aF 'HII_GRAPH_NAV_CHECKBOX_STATE=PASS' build/NAVIGATION.EFI
+          grep -aF 'HII_GRAPH_NAV_CONDITION_EVALUATOR=PASS' build/NAVIGATION.EFI
+          grep -aF 'HII_GRAPH_NAV_SUPPRESS_RUNTIME=PASS' build/NAVIGATION.EFI
+          grep -aF 'HII_GRAPH_NAV_GRAY_RUNTIME=PASS' build/NAVIGATION.EFI
+          grep -aF 'HII_GRAPH_NAV_DISABLE_RUNTIME=PASS' build/NAVIGATION.EFI
+          grep -aF 'HII_GRAPH_NAV_CONDITION_UNKNOWN_SAFE=PASS' build/NAVIGATION.EFI
           grep -aF 'HII_GRAPH_NAV_STRUCTURAL_KEYS=PASS' build/NAVIGATION.EFI
           grep -aF 'HII_GRAPH_NAV_FORM_KEYS=PASS' build/NAVIGATION.EFI
           grep -aF 'HII_GRAPH_NAV_FORM_ID_TRACKING=PASS' build/NAVIGATION.EFI
