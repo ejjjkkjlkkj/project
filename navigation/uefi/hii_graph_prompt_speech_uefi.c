@@ -145,6 +145,8 @@ static const efi_guid g_loaded_image_guid =
     {0x5b1b31a1u,0x9562u,0x11d2u,{0x8e,0x3f,0x00,0xa0,0xc9,0x69,0x72,0x3b}};
 static const efi_guid g_simple_fs_guid =
     {0x964e5b22u,0x6459u,0x11d2u,{0x8e,0x39,0x00,0xa0,0xc9,0x69,0x72,0x3b}};
+static const efi_guid g_m1603qa_308_setup_package_list_guid =
+    {0x899407d7u,0x99feu,0x43d8u,{0x9a,0x21,0x79,0xec,0x32,0x8c,0xac,0x21}};
 
 static u8 g_hii_package[1024u * 1024u];
 static void *g_hii_handles[256];
@@ -1011,6 +1013,14 @@ static u16 rd16(const u8 *p) {
 static u32 rd32(const u8 *p) {
     return (u32)p[0] | ((u32)p[1] << 8) | ((u32)p[2] << 16) | ((u32)p[3] << 24);
 }
+static int guid_bytes_equal(const u8 *p, const efi_guid *g) {
+    if (!p || !g) return 0;
+    if (rd32(p) != g->data1 || rd16(p + 4) != g->data2 || rd16(p + 6) != g->data3)
+        return 0;
+    for (u32 i = 0; i < 8u; ++i)
+        if (p[8u + i] != g->data4[i]) return 0;
+    return 1;
+}
 static int prompt_opcode(u8 op) {
     switch (op) {
         case 0x02: case 0x03: case 0x05: case 0x06: case 0x07:
@@ -1388,6 +1398,49 @@ static int resolve_hii_prompt(void *system_table) {
     u32 handles = (u32)(handle_bytes / sizeof(void *));
     marker("HII_FORMS_HANDLE_LIST=PASS");
 #ifdef QEV_INTERACTIVE_NAV
+    g_nav_prompt_total = 0;
+    g_nav_prompt_index = 0;
+    g_nav_help_available = 0;
+    g_nav_event_mask = 0;
+    g_nav_speech_events = 0;
+    g_nav_realtime_events = 0;
+    g_nav_speech_interruptions = 0;
+
+    /*
+     * Exact hardware profile first. The supplied M1603QA BIOS 308 exposes its
+     * Setup forms in package-list GUID 899407d7-99fe-43d8-9a21-79ec328cac21
+     * with root FormId 0x2710. Matching the GUID avoids attaching to another
+     * HII package that happens to use the generic title "Setup".
+     */
+    for (u32 hi = 0; hi < handles; ++hi) {
+        void *handle = g_hii_handles[hi];
+        usize size = sizeof(g_hii_package);
+        if (!handle || !db->export_package_lists ||
+            db->export_package_lists(db, handle, &size, g_hii_package) != 0 ||
+            size < 24u || size > sizeof(g_hii_package)) continue;
+        u32 list_len = rd32(g_hii_package + 16);
+        if (list_len < 24u || list_len > size) continue;
+        if (!guid_bytes_equal(g_hii_package, &g_m1603qa_308_setup_package_list_guid))
+            continue;
+
+        g_nav_hii_string = str;
+        g_nav_hii_handle = handle;
+        g_nav_form_history_depth = 0u;
+        if (!nav_load_form(0x2710u)) continue;
+
+        marker("HII_GRAPH_NAV_PROFILE=M1603QA_BIOS_308");
+        marker("HII_GRAPH_NAV_PACKAGE_GUID_MATCH=PASS");
+        marker("HII_GRAPH_NAV_ROOT_FORM_2710=PASS");
+        marker("HII_GRAPH_NAV_SETUP_FORMSET=PASS");
+        marker("IFR_PROMPT_STRING_ID=PASS");
+        marker("HII_LANGUAGE_AND_STRING=PASS");
+        marker("HII_GRAPH_NAV_PROMPT_COLLECTION=PASS");
+        marker("HII_GRAPH_NAV_SEMANTIC_ROLE=PASS");
+        marker("HII_PROMPT_SOURCE=PASS");
+        return 1;
+    }
+
+    /* Reset counters before the standards-generic Setup-title fallback. */
     g_nav_prompt_total = 0;
     g_nav_prompt_index = 0;
     g_nav_help_available = 0;
