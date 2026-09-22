@@ -31,9 +31,9 @@ def converted_units() -> dict[str, bytes]:
         | {u for seq in gu.DIGIT_UNITS.values() for u in seq}
         | {u for seq in gu.WORD_UNITS.values() for u in seq}
     )
-    source_units = speech.make_units()
+    source_units = gu.make_source_units(speech)
     return {
-        name: gu.convert(source_units[name], speech.SAMPLE_RATE)
+        name: gu.convert(source_units[name], gu.SOURCE_RATE)
         for name in names
     }
 

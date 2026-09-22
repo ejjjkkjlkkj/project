@@ -5,6 +5,7 @@ typedef unsigned short u16;
 typedef unsigned int u32;
 typedef unsigned long long u64;
 typedef unsigned long long usize;
+typedef int s32;
 
 #ifndef QEV_SOURCE_BLOB
 #define QEV_SOURCE_BLOB "UNBOUND"
@@ -31,6 +32,7 @@ extern const u32 qev_unit_bank_len;
 extern const u32 qev_unit_off[];
 extern const u32 qev_unit_len[];
 extern const u32 qev_unit_count;
+extern const u32 qev_unit_source_rate;
 extern const u32 qev_sil_unit_index;
 extern const u8 qev_letter_unit_count[];
 extern const u8 qev_letter_units[];
@@ -907,8 +909,38 @@ static int configure_output_path(u8 pin, u8 dac) {
     return 1;
 }
 
-static void copy_bytes(volatile u8 *dst, const u8 *src, u32 len) {
-    for (u32 i = 0; i < len; ++i) dst[i] = src[i];
+static int append_unit_pcm(volatile u8 *pcm, u32 capacity,
+                           u32 *total_bytes, u32 ui) {
+    if (!pcm || !total_bytes || ui >= qev_unit_count ||
+        !qev_unit_source_rate || (48000u % qev_unit_source_rate) != 0u)
+        return 0;
+    u32 off = qev_unit_off[ui];
+    u32 len = qev_unit_len[ui];
+    if (!len || off > qev_unit_bank_len || len > qev_unit_bank_len - off)
+        return 0;
+    u32 factor = 48000u / qev_unit_source_rate;
+    if (!factor || len > 0xffffffffu / factor / 4u) return 0;
+    u32 need = len * factor * 4u;
+    if (*total_bytes > capacity || need > capacity - *total_bytes) return 0;
+
+    u32 pos = *total_bytes;
+    for (u32 i = 0; i < len; ++i) {
+        s32 a = ((s32)qev_unit_bank[off + i] - 128) * 180;
+        s32 b = a;
+        if (i + 1u < len)
+            b = ((s32)qev_unit_bank[off + i + 1u] - 128) * 180;
+        for (u32 phase = 0; phase < factor; ++phase) {
+            s32 sample = a + ((b - a) * (s32)phase) / (s32)factor;
+            u16 bits = (u16)sample;
+            pcm[pos + 0u] = (u8)(bits & 0xffu);
+            pcm[pos + 1u] = (u8)(bits >> 8);
+            pcm[pos + 2u] = (u8)(bits & 0xffu);
+            pcm[pos + 3u] = (u8)(bits >> 8);
+            pos += 4u;
+        }
+    }
+    *total_bytes = pos;
+    return 1;
 }
 
 static volatile u8 *speech_stream_descriptor(void) {
@@ -1007,12 +1039,8 @@ static int speech_dma_begin(const char *text, u32 text_count) {
         if (ch == (u8)' ') {
             if (qev_sil_unit_index >= qev_unit_count) return 0;
             u32 ui = qev_sil_unit_index;
-            u32 off = qev_unit_off[ui];
-            u32 len = qev_unit_len[ui];
-            if (!len || off > qev_unit_bank_len || len > qev_unit_bank_len - off) return 0;
-            if (total_bytes > dma_bytes - pcm_off || len > dma_bytes - pcm_off - total_bytes) return 0;
-            copy_bytes(pcm + total_bytes, qev_unit_bank + off, len);
-            total_bytes += len;
+            if (!append_unit_pcm(pcm, dma_bytes - pcm_off, &total_bytes, ui))
+                return 0;
             continue;
         }
 
@@ -1036,15 +1064,9 @@ static int speech_dma_begin(const char *text, u32 text_count) {
                         total_bytes += phoneme_gap_bytes;
                     }
                     u32 ui = word_units[j];
-                    if (ui >= qev_unit_count) return 0;
-                    u32 off = qev_unit_off[ui];
-                    u32 len = qev_unit_len[ui];
-                    if (!len || off > qev_unit_bank_len ||
-                        len > qev_unit_bank_len - off) return 0;
-                    if (total_bytes > dma_bytes - pcm_off ||
-                        len > dma_bytes - pcm_off - total_bytes) return 0;
-                    copy_bytes(pcm + total_bytes, qev_unit_bank + off, len);
-                    total_bytes += len;
+                    if (!append_unit_pcm(pcm, dma_bytes - pcm_off,
+                                         &total_bytes, ui))
+                        return 0;
                 }
                 i += word_length - 1u;
                 marker("HII_GRAPH_SPEECH_WORD_PRONUNCIATION=PASS");
@@ -1076,13 +1098,8 @@ static int speech_dma_begin(const char *text, u32 text_count) {
         if (!unit_row || !n || n > 8u) return 0;
         for (u32 j = 0; j < n; ++j) {
             u32 ui = unit_row[j];
-            if (ui >= qev_unit_count) return 0;
-            u32 off = qev_unit_off[ui];
-            u32 len = qev_unit_len[ui];
-            if (!len || off > qev_unit_bank_len || len > qev_unit_bank_len - off) return 0;
-            if (total_bytes > dma_bytes - pcm_off || len > dma_bytes - pcm_off - total_bytes) return 0;
-            copy_bytes(pcm + total_bytes, qev_unit_bank + off, len);
-            total_bytes += len;
+            if (!append_unit_pcm(pcm, dma_bytes - pcm_off, &total_bytes, ui))
+                return 0;
         }
     }
     if (!total_bytes) return 0;
@@ -1092,6 +1109,7 @@ static int speech_dma_begin(const char *text, u32 text_count) {
     total_bytes += tail_silence_bytes;
     marker("HII_GRAPH_SPEECH_PACING=PASS");
     marker("HII_GRAPH_SPEECH_CONTINUOUS_PHONEMES=PASS");
+    marker("HII_GRAPH_SPEECH_WHOLE_CLIP_VOICECORE=PASS");
     marker("HII_GRAPH_SPEECH_DIGITS=PASS");
     marker("HII_GRAPH_SPEECH_HYBRID_WORD_MODE=PASS");
     marker("HII_GRAPH_SPEECH_UNKNOWN_WORD_FALLBACK=PASS");
