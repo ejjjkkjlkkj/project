@@ -41,7 +41,7 @@ jobs:
           (cd navigation/uefi && python test_navigation_source_contract.py)
           (cd navigation/uefi && python test_m1603qa_308_baseline.py)
           python navigation/uefi/generate_units.py build/navigation_units.c build/navigation_units.txt
-          grep -F 'source=voice/uefi_units/build_native_units.py' build/navigation_units.txt
+          grep -F 'source=voice/v4/native_speech_v4.py' build/navigation_units.txt
           grep -F 'speech-mode=whole-clip-voicecore-v4-uefi-v6' build/navigation_units.txt
           grep -F 'word-lexicon-count=' build/navigation_units.txt
           grep -F 'letter-map=a-z-french-letter-names' build/navigation_units.txt
