@@ -4,12 +4,16 @@
 This proves emitted content, not human intelligibility. It pairs the F1, Down
 and Up runtime speech strings from the serial log with the actual QEMU WAV,
 reproduces the firmware's <=32-character word-boundary chunking, and requires
-every captured chunk to be bit-identical and ordered after the startup phrase.
+ordered, bit-identical captured speech.
 
 Consecutive DMA chunks contain deliberate leading/trailing zero PCM. Those
 silence regions can overlap as byte patterns in a continuous capture, so search
-ordering advances to the end of each chunk's non-silent core rather than to the
-end of its trailing silence. The complete expected chunk must still match.
+ordering advances to the end of each chunk's non-silent core. QEMU's WAV
+backend may close the file before writing every final zero frame after the last
+utterance. Only the final chunk may therefore use the strict tail-elision rule:
+its complete leading silence plus non-silent core must be bit-identical, the
+remaining capture must contain zeros only, and the omitted bytes must belong
+exclusively to the expected trailing-zero region.
 """
 from __future__ import annotations
 
@@ -128,6 +132,38 @@ def find_frame_aligned(raw: bytes, expected: bytes, start: int) -> int:
     return pos
 
 
+def final_zero_tail_match(
+    raw: bytes,
+    expected: bytes,
+    cursor: int,
+    leading_silence: int,
+    trailing_silence: int,
+) -> tuple[int, int, int] | None:
+    """Accept only QEMU file-end elision of final trailing zero PCM.
+
+    Returns (chunk_start, core_end, omitted_trailing_zero_bytes).
+    """
+    core_end_expected = len(expected) - trailing_silence
+    prefix = expected[:core_end_expected]
+    start = find_frame_aligned(raw, prefix, cursor)
+    if start < 0:
+        return None
+
+    core_end = start + len(prefix)
+    captured_tail = raw[core_end:]
+    if len(captured_tail) > trailing_silence:
+        return None
+    if any(captured_tail):
+        return None
+
+    # The accepted prefix includes the exact generated leading silence and all
+    # non-silent samples; only zero PCM at file end may be absent.
+    if leading_silence <= 0 or core_end <= start + leading_silence:
+        return None
+    omitted = trailing_silence - len(captured_tail)
+    return start, core_end, omitted
+
+
 def main() -> int:
     if len(sys.argv) not in (3, 4):
         print(
@@ -154,25 +190,50 @@ def main() -> int:
     discovery_exact = raw.startswith(discovery)
     cursor = len(discovery) if discovery_exact else 0
     chunk_results: list[dict[str, object]] = []
-    all_exact = format_ok and discovery_exact
+    all_exact_content = format_ok and discovery_exact
 
-    for event in events:
+    for event_index, event in enumerate(events):
         chunks = split_runtime_phrase(event["text"])
         for chunk_index, chunk in enumerate(chunks):
             expected = speech_pcm.render_runtime_pcm(chunk)
             leading_silence, trailing_silence = outer_silence_bytes(expected)
             core_bytes = len(expected) - leading_silence - trailing_silence
+            is_final_chunk = (
+                event_index == len(events) - 1
+                and chunk_index == len(chunks) - 1
+            )
+
             offset = (
                 find_frame_aligned(raw, expected, cursor)
-                if all_exact
+                if all_exact_content
                 else -1
             )
-            exact = offset >= 0
-            core_end = (
-                offset + leading_silence + core_bytes
-                if exact
-                else -1
-            )
+            full_chunk_exact = offset >= 0
+            tail_elision_accepted = False
+            omitted_tail_bytes = 0
+
+            if full_chunk_exact:
+                core_end = offset + leading_silence + core_bytes
+                content_exact = True
+            elif all_exact_content and is_final_chunk:
+                fallback = final_zero_tail_match(
+                    raw,
+                    expected,
+                    cursor,
+                    leading_silence,
+                    trailing_silence,
+                )
+                if fallback is not None:
+                    offset, core_end, omitted_tail_bytes = fallback
+                    tail_elision_accepted = True
+                    content_exact = True
+                else:
+                    core_end = -1
+                    content_exact = False
+            else:
+                core_end = -1
+                content_exact = False
+
             chunk_results.append(
                 {
                     "key": event["key"],
@@ -186,28 +247,34 @@ def main() -> int:
                     "trailing_silence_bytes": trailing_silence,
                     "capture_offset_bytes": offset,
                     "ordered_core_end_bytes": core_end,
-                    "bit_identical": exact,
+                    "full_chunk_bit_identical": full_chunk_exact,
+                    "speech_content_bit_identical": content_exact,
+                    "final_zero_tail_elision_accepted": tail_elision_accepted,
+                    "omitted_trailing_zero_bytes": omitted_tail_bytes,
                 }
             )
-            if not exact:
-                all_exact = False
+            if not content_exact:
+                all_exact_content = False
                 break
 
             # Do not skip a legitimate following chunk whose leading silence
             # begins inside this chunk's trailing all-zero region.
             cursor = core_end
-        if not all_exact:
+        if not all_exact_content:
             break
 
     report = {
         "scope": "COMPLETED_F1_DOWN_UP_NAVIGATION_SPEECH",
-        "ordering_rule": "FULL_CHUNK_EXACT_MATCH_ADVANCE_BY_NON_SILENT_CORE",
+        "ordering_rule": "ADVANCE_BY_END_OF_EXACT_SPEECH_CONTENT",
+        "final_capture_rule": "ONLY_FINAL_TRAILING_ZERO_ELISION_ALLOWED",
         "wav": params,
         "discovery_prefix_exact": discovery_exact,
         "events": events,
         "chunks": chunk_results,
         "format_ok": format_ok,
-        "full_navigation_speech_content": "PASS" if all_exact else "FAIL",
+        "full_navigation_speech_content": (
+            "PASS" if all_exact_content else "FAIL"
+        ),
         "intelligibility": "NOT_TESTED",
     }
     if report_path:
@@ -225,10 +292,10 @@ def main() -> int:
     print("NAVIGATION_SPEECH_KEYS=F1,DOWN,UP")
     print(
         "FULL_NAVIGATION_SPEECH_CONTENT="
-        + ("PASS" if all_exact else "FAIL")
+        + ("PASS" if all_exact_content else "FAIL")
     )
     print("INTELLIGIBILITY=NOT_TESTED")
-    return 0 if all_exact else 1
+    return 0 if all_exact_content else 1
 
 
 if __name__ == "__main__":
