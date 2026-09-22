@@ -10,6 +10,19 @@ required = (
     'HII_GRAPH_NAV_REALTIME_MODE=INTERRUPTIBLE_DMA',
     'HII_GRAPH_SPEECH_QUEUE=INTERRUPTIBLE_64',
     'HII_GRAPH_SPEECH_WORD_BOUNDARY_CHUNKING=PASS',
+    'HII_GRAPH_SPEECH_HYBRID_WORD_MODE=PASS',
+    'HII_GRAPH_SPEECH_WORD_PRONUNCIATION=PASS',
+    'HII_GRAPH_SPEECH_WORD_FALLBACK=LETTER_NAMES',
+    'HII_GRAPH_SPEECH_UNKNOWN_WORD_FALLBACK=PASS',
+    'speech_lookup_word',
+    'qev_word_count',
+    'qev_word_name_stride',
+    'qev_word_unit_stride',
+    'qev_word_name_len',
+    'qev_word_names',
+    'qev_word_unit_count',
+    'qev_word_units',
+    'phoneme_gap_bytes = 3u * 192u',
     'HII_GRAPH_SPEECH_MULTI_CHUNK=PASS',
     'HII_GRAPH_SPEECH_CHUNK_START=PASS',
     'HII_GRAPH_SPEECH_CHUNK_CONTINUE=PASS',
@@ -290,5 +303,17 @@ run_start = text.index("static int run_speech_dma")
 run_end = text.index("static u16 rd16", run_start)
 run = text[run_start:run_end]
 assert "speech_phrase_begin" in run and "speech_phrase_poll" in run
+
+
+
+# Common-word pronunciation must be attempted only at word boundaries and
+# unknown words must retain the proven letter-name fallback.
+sd_start = text.index("static int speech_dma_begin")
+sd_end = text.index("static int speech_dma_poll", sd_start)
+sd = text[sd_start:sd_end]
+assert "speech_lookup_word(text + i, word_length" in sd
+assert "(i == 0u || text[i - 1u] == ' ')" in sd
+assert "qev_letter_unit_count" in sd and "qev_digit_unit_count" in sd
+assert sd.index("speech_lookup_word(text + i, word_length") < sd.index("qev_letter_unit_count")
 
 print("SCREEN_READER_NAVIGATION_SOURCE_CONTRACT=PASS")
