@@ -83,6 +83,10 @@ int main(void) {
     if (!check(sr_where_am_i(&rt), "where am i")) return 1;
     if (!check(strstr(voice.text, "Vous etes sur") != NULL, "where am i prefix")) return 1;
 
+    if (!check(sr_handle(&rt, SR_CMD_NEXT_CONTROL), "next control navigation")) return 1;
+    if (!check(rt.focus_index == 3u, "next control preserves document order")) return 1;
+    if (!check(sr_handle(&rt, SR_CMD_PREVIOUS_CONTROL), "previous control navigation")) return 1;
+    if (!check(rt.focus_index == 2u, "previous control preserves document order")) return 1;
     if (!check(sr_move_role(&rt, SR_ROLE_EDIT, 1), "structural edit navigation")) return 1;
     if (!check(rt.focus_index == 3u, "edit focused")) return 1;
     if (!check(strstr(voice.text, "obligatoire") != NULL, "required state spoken")) return 1;
