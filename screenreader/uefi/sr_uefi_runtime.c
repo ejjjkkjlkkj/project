@@ -17,6 +17,7 @@ int sr_uefi_runtime_init(sr_uefi_runtime *runtime,
     sr_init(&runtime->screenreader, nodes, node_count, speech);
 
     if (!sr_uefi_keyboard_init(&runtime->keyboard, system_table)) return 0;
+    sr_chooser_init(&runtime->chooser);
 
     runtime->activate = activate;
     runtime->activate_ctx = activate_ctx;
@@ -50,9 +51,21 @@ int sr_uefi_runtime_tick(sr_uefi_runtime *runtime) {
         return did_work;
 
     runtime->keys_seen++;
+
+    if (runtime->chooser.active) {
+        (void)sr_chooser_handle_key(
+            &runtime->chooser, &runtime->screenreader, key);
+        return 1;
+    }
+
     command = sr_key_to_command(key);
     if (command == SR_CMD_NONE) return 1;
     runtime->commands_seen++;
+
+    if (command == SR_CMD_ITEM_CHOOSER) {
+        (void)sr_chooser_open(&runtime->chooser, &runtime->screenreader);
+        return 1;
+    }
 
     if (command == SR_CMD_ACTIVATE && runtime->activate) {
         node = sr_current(&runtime->screenreader);
