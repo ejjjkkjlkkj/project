@@ -60,6 +60,9 @@ assert int(m.group(1)) >= data["max_controls_per_form"], (
 )
 
 for marker in (
+    "HII_GRAPH_NAV_PROFILE=M1603QA_BIOS_308",
+    "HII_GRAPH_NAV_PACKAGE_GUID_MATCH=PASS",
+    "HII_GRAPH_NAV_ROOT_FORM_2710=PASS",
     "HII_GRAPH_NAV_FORM_AWARE=PASS",
     "HII_GRAPH_NAV_SETUP_FORMSET=PASS",
     "HII_GRAPH_NAV_FORM_LOAD=PASS",
@@ -70,6 +73,8 @@ for marker in (
     assert marker in source, marker
 
 for contract in (
+    "g_m1603qa_308_setup_package_list_guid",
+    "guid_bytes_equal",
     "nav_package_is_setup",
     "nav_load_form",
     "g_nav_ref_form_ids",
