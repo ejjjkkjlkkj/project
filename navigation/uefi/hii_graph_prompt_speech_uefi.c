@@ -281,7 +281,7 @@ static char g_nav_focus_speech[QEV_NAV_TEXT_MAX + 1u];
 static u8 g_nav_focus_speech_length;
 static char g_nav_position_text[33];
 static u8 g_nav_position_length;
-static char g_nav_where_text[33];
+static char g_nav_where_text[QEV_NAV_TEXT_MAX + 1u];
 static u8 g_nav_where_length;
 static char g_nav_edit_status_text[33];
 static u8 g_nav_edit_status_length;
@@ -1950,8 +1950,8 @@ static int nav_build_where_am_i_speech(void *system_table, u8 prompt_index,
                                               &staged);
     if (!have_value) value_length = 0u;
     u8 suffix_budget = value_length ? (u8)(value_length + 1u) : 0u;
-    if (suffix_budget > 20u) suffix_budget = 20u;
-    u8 prefix_budget = (u8)(32u - suffix_budget);
+    if (suffix_budget > 32u) suffix_budget = 32u;
+    u8 prefix_budget = (u8)(QEV_NAV_TEXT_MAX - suffix_budget);
     u8 n = 0u;
 
     for (u8 i = 0u; i < g_nav_form_title_length && n < prefix_budget; ++i)
@@ -1961,12 +1961,13 @@ static int nav_build_where_am_i_speech(void *system_table, u8 prompt_index,
         out[n++] = g_nav_prompts[prompt_index][i];
 
     if (value_length && value_text) {
-        if (n && n < 32u) out[n++] = ' ';
-        for (u8 i = 0u; i < value_length && n < 32u; ++i)
+        if (n && n < QEV_NAV_TEXT_MAX) out[n++] = ' ';
+        for (u8 i = 0u; i < value_length && n < QEV_NAV_TEXT_MAX; ++i)
             out[n++] = value_text[i];
     }
     out[n] = 0;
     *length_out = n;
+    marker("HII_GRAPH_NAV_WHERE_AM_I_64=PASS");
     return n != 0u;
 }
 
