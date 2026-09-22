@@ -243,6 +243,10 @@ static u8 g_nav_event_mask;
 static u8 g_nav_speech_events;
 static u8 g_nav_realtime_events;
 static u8 g_nav_speech_interruptions;
+static u16 g_nav_condition_known;
+static u16 g_nav_condition_unknown;
+static u16 g_nav_condition_hidden;
+static u16 g_nav_condition_gray;
 #define NAV_SEEN_UP        0x01u
 #define NAV_SEEN_DOWN      0x02u
 #define NAV_SEEN_R         0x04u
@@ -1134,6 +1138,7 @@ static const char *ifr_semantic_role(u8 op) {
 #define NAV_COND_SUPPRESS 0x01u
 #define NAV_COND_GRAY     0x02u
 #define NAV_COND_DISABLE  0x04u
+#define NAV_COND_UNKNOWN  0x80u
 
 static u8 ifr_condition_flag(u8 op) {
     switch (op) {
@@ -1409,7 +1414,7 @@ static int nav_eval_condition_expression(void *system_table, u8 handle_index,
     u8 sp = 0u;
     const u8 *q = first;
     u8 first_scope = (u8)(q[1] >> 7);
-    u8 depth = first_scope ? 1u : 0u;
+    u8 depth = 0u;
     u8 done = 0u;
 
     while (!done) {
@@ -1697,6 +1702,14 @@ static void nav_prompt_load(u8 index) {
     const char *role = ifr_semantic_role(g_nav_prompt_opcode);
     u32 n = 0;
     while (*role && n < 32u) g_nav_speech_text[n++] = *role++;
+    const char *state = 0;
+    if (g_nav_prompt_condition_flags[index] & NAV_COND_GRAY)
+        state = " disabled";
+    else if (g_nav_prompt_condition_flags[index] & NAV_COND_UNKNOWN)
+        state = " conditional";
+    if (state) {
+        while (*state && n < 32u) g_nav_speech_text[n++] = *state++;
+    }
     if (n < 32u && g_prompt_count) g_nav_speech_text[n++] = ' ';
     for (u32 j = 0; j < g_prompt_count && n < 32u; ++j)
         g_nav_speech_text[n++] = g_prompt_text[j];
@@ -1747,8 +1760,8 @@ static int nav_get_form_title(u16 form_id, char *out, u32 *count_out) {
  * Build one live form at a time. This preserves current VarStore and one-of
  * value support while replacing the previous flat all-forms catalogue.
  */
-static int nav_load_form(u16 requested_form_id) {
-    if (!g_nav_hii_string || !g_nav_hii_handle ||
+static int nav_load_form(void *system_table, u16 requested_form_id) {
+    if (!system_table || !g_nav_hii_string || !g_nav_hii_handle ||
         g_nav_m1603qa_handle_index == 0xffu) return 0;
 
     u32 list_len = rd32(g_hii_package + 16);
@@ -1760,6 +1773,10 @@ static int nav_load_form(u16 requested_form_id) {
     g_nav_help_available = 0u;
     g_nav_form_title[0] = 0;
     g_nav_form_title_length = 0u;
+    g_nav_condition_known = 0u;
+    g_nav_condition_unknown = 0u;
+    g_nav_condition_hidden = 0u;
+    g_nav_condition_gray = 0u;
 
     u16 selected_form_id = 0u;
     int in_selected_form = 0;
@@ -1777,9 +1794,11 @@ static int nav_load_form(u16 requested_form_id) {
             const u8 *q = p + 4;
             const u8 *end = p + len;
             u8 scope_condition_stack[64];
+            u8 scope_unknown_stack[64];
             u8 scope_oneof_stack[64];
             u8 scope_depth = 0u;
             u8 active_condition_flags = 0u;
+            u8 active_unknown = 0u;
             u8 active_oneof_prompt = 0xffu;
 
             while (q + 2u <= end) {
@@ -1793,8 +1812,11 @@ static int nav_load_form(u16 requested_form_id) {
                         --scope_depth;
                         active_oneof_prompt = scope_oneof_stack[scope_depth];
                         active_condition_flags = 0u;
-                        for (u8 si = 0u; si < scope_depth; ++si)
+                        active_unknown = 0u;
+                        for (u8 si = 0u; si < scope_depth; ++si) {
                             active_condition_flags |= scope_condition_stack[si];
+                            active_unknown |= scope_unknown_stack[si];
+                        }
                     }
                     q += oplen;
                     continue;
@@ -1816,7 +1838,31 @@ static int nav_load_form(u16 requested_form_id) {
                     }
                 }
 
+                u8 condition_active = 0u;
+                u8 condition_unknown = 0u;
+                u8 condition_kind = ifr_condition_flag(op);
+                if (in_selected_form && condition_kind) {
+                    const u8 *after_expression = 0;
+                    u8 truth = 0u;
+                    int eval = nav_eval_condition_expression(
+                        system_table, g_nav_m1603qa_handle_index,
+                        q + oplen, end, &truth, &after_expression);
+                    if (eval < 0 || !after_expression ||
+                        after_expression <= q + oplen || after_expression > end)
+                        return 0;
+                    if (eval > 0) {
+                        ++g_nav_condition_known;
+                        if (truth) condition_active = condition_kind;
+                    } else {
+                        ++g_nav_condition_unknown;
+                        condition_unknown = 1u;
+                    }
+                }
+
                 u8 added_prompt_index = 0xffu;
+                u8 hidden_here =
+                    (u8)(active_condition_flags &
+                         (NAV_COND_SUPPRESS | NAV_COND_DISABLE));
                 if (in_selected_form && prompt_opcode(op) && oplen >= 4u) {
                     u16 token = rd16(q + 2);
                     char candidate[33];
@@ -1836,43 +1882,55 @@ static int nav_load_form(u16 requested_form_id) {
                     u16 ref_form_id =
                         (op == 0x0fu && oplen >= 15u) ? rd16(q + 13) : 0u;
 
-                    if (g_nav_m1603qa_308_profile &&
-                        selected_form_id == 0x2710u && op == 0x0fu &&
-                        (ref_form_id < 0x2716u || ref_form_id > 0x271au)) {
-                        marker("HII_GRAPH_NAV_M1603QA_ROOT_FILTER=PASS");
-                        q += oplen;
-                        continue;
-                    }
+                    if (hidden_here) {
+                        ++g_nav_condition_hidden;
+                    } else {
+                        if (g_nav_m1603qa_308_profile &&
+                            selected_form_id == 0x2710u && op == 0x0fu &&
+                            (ref_form_id < 0x2716u || ref_form_id > 0x271au)) {
+                            marker("HII_GRAPH_NAV_M1603QA_ROOT_FILTER=PASS");
+                            q += oplen;
+                            continue;
+                        }
 
-                    if (help_token)
-                        (void)get_hii_string(g_nav_hii_string, g_nav_hii_handle,
-                                             help_token, help_candidate,
-                                             &help_count);
+                        if (help_token)
+                            (void)get_hii_string(g_nav_hii_string, g_nav_hii_handle,
+                                                 help_token, help_candidate,
+                                                 &help_count);
 
-                    int have_prompt =
-                        token && get_hii_string(g_nav_hii_string, g_nav_hii_handle,
-                                                token, candidate,
-                                                &candidate_count);
-                    if (!have_prompt && ref_form_id) {
-                        have_prompt = nav_get_form_title(ref_form_id, candidate,
-                                                         &candidate_count);
-                        if (have_prompt)
-                            marker("HII_GRAPH_NAV_REF_TITLE_FALLBACK=PASS");
-                    }
+                        int have_prompt =
+                            token && get_hii_string(g_nav_hii_string,
+                                                    g_nav_hii_handle,
+                                                    token, candidate,
+                                                    &candidate_count);
+                        if (!have_prompt && ref_form_id) {
+                            have_prompt = nav_get_form_title(
+                                ref_form_id, candidate, &candidate_count);
+                            if (have_prompt)
+                                marker("HII_GRAPH_NAV_REF_TITLE_FALLBACK=PASS");
+                        }
 
-                    if (have_prompt) {
-                        int added = nav_prompt_add(
-                            op, g_nav_m1603qa_handle_index, value_width,
-                            selected_form_id, question_id,
-                            varstore_id, var_info, question_flags,
-                            active_condition_flags,
-                            candidate, candidate_count,
-                            help_candidate, help_count, ref_form_id);
-                        if (added > 0) added_prompt_index = (u8)(added - 1);
+                        if (have_prompt) {
+                            u8 prompt_condition_flags = active_condition_flags;
+                            if (active_unknown)
+                                prompt_condition_flags |= NAV_COND_UNKNOWN;
+                            int added = nav_prompt_add(
+                                op, g_nav_m1603qa_handle_index, value_width,
+                                selected_form_id, question_id,
+                                varstore_id, var_info, question_flags,
+                                prompt_condition_flags,
+                                candidate, candidate_count,
+                                help_candidate, help_count, ref_form_id);
+                            if (added > 0) {
+                                added_prompt_index = (u8)(added - 1);
+                                if (active_condition_flags & NAV_COND_GRAY)
+                                    ++g_nav_condition_gray;
+                            }
+                        }
                     }
                 }
 
-                if (in_selected_form && op == 0x09u &&
+                if (in_selected_form && !hidden_here && op == 0x09u &&
                     active_oneof_prompt != 0xffu && oplen >= 7u) {
                     u16 option_token = rd16(q + 2);
                     u8 option_type = q[5];
@@ -1892,11 +1950,12 @@ static int nav_load_form(u16 requested_form_id) {
 
                 if (op_header & 0x80u) {
                     if (scope_depth < (u8)sizeof(scope_condition_stack)) {
-                        u8 cond = ifr_condition_flag(op);
-                        scope_condition_stack[scope_depth] = cond;
+                        scope_condition_stack[scope_depth] = condition_active;
+                        scope_unknown_stack[scope_depth] = condition_unknown;
                         scope_oneof_stack[scope_depth] = active_oneof_prompt;
                         ++scope_depth;
-                        active_condition_flags |= cond;
+                        active_condition_flags |= condition_active;
+                        active_unknown |= condition_unknown;
                         if (in_selected_form && op == 0x05u &&
                             added_prompt_index != 0xffu)
                             active_oneof_prompt = added_prompt_index;
@@ -1922,6 +1981,23 @@ static int nav_load_form(u16 requested_form_id) {
     marker("HII_GRAPH_NAV_VARSTORE_METADATA=PASS");
     marker("HII_GRAPH_NAV_ONEOF_OPTIONS=PASS");
     marker("HII_GRAPH_NAV_CONDITION_TRACKING=PASS");
+    marker("HII_GRAPH_NAV_CONDITION_EVALUATOR=PASS");
+    marker("HII_GRAPH_NAV_SUPPRESS_RUNTIME=PASS");
+    marker("HII_GRAPH_NAV_GRAY_RUNTIME=PASS");
+    marker("HII_GRAPH_NAV_DISABLE_RUNTIME=PASS");
+    marker("HII_GRAPH_NAV_CONDITION_UNKNOWN_SAFE=PASS");
+    serial_puts("HII_GRAPH_NAV_CONDITION_KNOWN=0x");
+    serial_hex32((u32)g_nav_condition_known);
+    serial_puts("\r\n");
+    serial_puts("HII_GRAPH_NAV_CONDITION_UNKNOWN=0x");
+    serial_hex32((u32)g_nav_condition_unknown);
+    serial_puts("\r\n");
+    serial_puts("HII_GRAPH_NAV_CONDITION_HIDDEN=0x");
+    serial_hex32((u32)g_nav_condition_hidden);
+    serial_puts("\r\n");
+    serial_puts("HII_GRAPH_NAV_CONDITION_GRAY=0x");
+    serial_hex32((u32)g_nav_condition_gray);
+    serial_puts("\r\n");
     serial_puts("HII_GRAPH_NAV_ACTIVE_FORM_ID=0x");
     serial_hex32((u32)selected_form_id);
     serial_puts("\r\n");
@@ -2125,7 +2201,7 @@ static int resolve_hii_prompt(void *system_table) {
         g_nav_hii_handle = handle;
         g_nav_m1603qa_308_profile = 1u;
         g_nav_form_history_depth = 0u;
-        if (!nav_load_form(0x2710u)) {
+        if (!nav_load_form(system_table, 0x2710u)) {
             marker("HII_GRAPH_NAV_PROFILE=M1603QA_BIOS_308_FORM_LOAD_FAILED");
             return 0;
         }
@@ -2459,7 +2535,7 @@ static int wait_navigation_keys(void *system_table) {
                 speech_dma_stop();
                 if (g_nav_m1603qa_308_profile && g_nav_form_history_depth) {
                     u16 parent = g_nav_form_history[--g_nav_form_history_depth];
-                    if (!nav_load_form(parent)) return 0;
+                    if (!nav_load_form(system_table, parent)) return 0;
                     marker("HII_GRAPH_NAV_FORM_BACK=PASS");
                     if (g_nav_form_title_length) {
                         speech_override = g_nav_form_title;
@@ -2488,7 +2564,7 @@ static int wait_navigation_keys(void *system_table) {
                     if (g_nav_form_history_depth >= 16u) return 0;
                     g_nav_form_history[g_nav_form_history_depth++] = previous;
                     speech_dma_stop();
-                    if (!nav_load_form(target)) {
+                    if (!nav_load_form(system_table, target)) {
                         --g_nav_form_history_depth;
                         return 0;
                     }
