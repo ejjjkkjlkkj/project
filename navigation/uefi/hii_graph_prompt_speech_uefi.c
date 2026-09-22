@@ -2213,7 +2213,7 @@ static int wait_repeat_key(void *system_table) {
 
 #ifdef QEV_INTERACTIVE_NAV
 static int wait_navigation_keys(void *system_table) {
-    if (!system_table || g_nav_prompt_total < 2u) return 0;
+    if (!system_table || !g_nav_prompt_total) return 0;
     simple_text_input_protocol *conin =
         *(simple_text_input_protocol **)((u8 *)system_table + 0x30);
     if (!conin || !conin->read_key || !g_stall) return 0;
@@ -2244,15 +2244,56 @@ static int wait_navigation_keys(void *system_table) {
             if (key.unicode_char == 0x001bu || key.scan_code == 0x0017u) {
                 marker("HII_GRAPH_NAV_KEY=ESC");
                 speech_dma_stop();
-                if ((g_nav_event_mask & NAV_REQUIRED_MASK) != NAV_REQUIRED_MASK ||
-                    g_nav_speech_events < 7u) {
-                    marker("HII_GRAPH_NAV_REQUIRED_EVENTS=PENDING");
-                    marker("HII_GRAPH_NAV_EXIT=BLOCKED_INCOMPLETE");
-                    continue;
+                if (g_nav_m1603qa_308_profile && g_nav_form_history_depth) {
+                    u16 parent = g_nav_form_history[--g_nav_form_history_depth];
+                    if (!nav_load_form(parent)) return 0;
+                    marker("HII_GRAPH_NAV_FORM_BACK=PASS");
+                    if (g_nav_form_title_length) {
+                        speech_override = g_nav_form_title;
+                        speech_override_length = g_nav_form_title_length;
+                        marker("HII_GRAPH_NAV_FORM_TITLE_SPEECH=PASS");
+                    }
+                    speak = 1;
+                } else {
+                    if ((g_nav_event_mask & NAV_REQUIRED_MASK) != NAV_REQUIRED_MASK ||
+                        g_nav_speech_events < 7u) {
+                        marker("HII_GRAPH_NAV_REQUIRED_EVENTS=PENDING");
+                        marker("HII_GRAPH_NAV_EXIT=BLOCKED_INCOMPLETE");
+                        continue;
+                    }
+                    marker("HII_GRAPH_NAV_REQUIRED_EVENTS=PASS");
+                    marker("HII_GRAPH_NAV_EXIT=PASS");
+                    return 1;
                 }
-                marker("HII_GRAPH_NAV_REQUIRED_EVENTS=PASS");
-                marker("HII_GRAPH_NAV_EXIT=PASS");
-                return 1;
+            }
+            if (key.unicode_char == 0x000du) {
+                marker("HII_GRAPH_NAV_KEY=ENTER");
+                u16 target = g_nav_ref_form_ids[g_nav_prompt_index];
+                if (g_nav_m1603qa_308_profile && target &&
+                    target != g_nav_current_form_id) {
+                    u16 previous = g_nav_current_form_id;
+                    if (g_nav_form_history_depth >= 16u) return 0;
+                    g_nav_form_history[g_nav_form_history_depth++] = previous;
+                    speech_dma_stop();
+                    if (!nav_load_form(target)) {
+                        --g_nav_form_history_depth;
+                        return 0;
+                    }
+                    marker("HII_GRAPH_NAV_FORM_ENTER=PASS");
+                    if (g_nav_form_title_length) {
+                        speech_override = g_nav_form_title;
+                        speech_override_length = g_nav_form_title_length;
+                        marker("HII_GRAPH_NAV_FORM_TITLE_SPEECH=PASS");
+                    }
+                    speak = 1;
+                } else {
+                    if (target == g_nav_current_form_id)
+                        marker("HII_GRAPH_NAV_SELF_REF_ACTION=BLOCKED");
+                    marker("HII_GRAPH_NAV_READ_ONLY_ACTION=BLOCKED");
+                    speech_override = "read only";
+                    speech_override_length = 9u;
+                    speak = 1;
+                }
             }
             if (key.unicode_char == (u16)'w' || key.unicode_char == (u16)'W') {
                 marker("HII_GRAPH_NAV_KEY=W");
