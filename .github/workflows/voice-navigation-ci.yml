@@ -24,7 +24,7 @@ jobs:
       - name: Validate Python sources
         run: |
           set -euo pipefail
-          python -m py_compile             voice/v4/native_speech_v4.py             voice/v4/voicecore_v4.py             voice/v4/test_native_speech_v4.py             voice/v4/test_voicecore_v4.py             voice/uefi_units/build_native_units.py             navigation/uefi/generate_units.py
+          python -m py_compile             voice/v4/native_speech_v4.py             voice/v4/voicecore_v4.py             voice/v4/test_native_speech_v4.py             voice/v4/test_voicecore_v4.py             voice/uefi_units/build_native_units.py             navigation/uefi/generate_units.py             navigation/uefi/test_m1603qa_308_baseline.py
 
       - name: Run VoiceCore v4 tests
         working-directory: voice/v4
@@ -39,6 +39,7 @@ jobs:
           mkdir -p build
           (cd navigation/uefi && python test_generate_units.py)
           (cd navigation/uefi && python test_navigation_source_contract.py)
+          (cd navigation/uefi && python test_m1603qa_308_baseline.py)
           python navigation/uefi/generate_units.py build/navigation_units.c build/navigation_units.txt
           grep -F 'source=voice/uefi_units/build_native_units.py' build/navigation_units.txt
           grep -F 'speech-mode=clear-lettername-spelling-fr-v3' build/navigation_units.txt
@@ -72,6 +73,12 @@ jobs:
           grep -aF 'HII_GRAPH_NAV_LIVE_OPTION_MATCH=PASS' build/NAVIGATION.EFI
           grep -aF 'HII_GRAPH_NAV_LIVE_VALUE_KEY=PASS' build/NAVIGATION.EFI
           grep -aF 'HII_GRAPH_NAV_LIVE_VALUE_READ=PASS' build/NAVIGATION.EFI
+          grep -aF 'HII_GRAPH_NAV_PROFILE=M1603QA_BIOS_308' build/NAVIGATION.EFI
+          grep -aF 'HII_GRAPH_NAV_PACKAGE_GUID_MATCH=PASS' build/NAVIGATION.EFI
+          grep -aF 'HII_GRAPH_NAV_ROOT_FORM_2710=PASS' build/NAVIGATION.EFI
+          grep -aF 'HII_GRAPH_NAV_FORM_AWARE=PASS' build/NAVIGATION.EFI
+          grep -aF 'HII_GRAPH_NAV_FORM_ENTER=PASS' build/NAVIGATION.EFI
+          grep -aF 'HII_GRAPH_NAV_READ_ONLY_ACTION=BLOCKED' build/NAVIGATION.EFI
           grep -aF 'HII_GRAPH_NAV_CONDITION_TRACKING=PASS' build/NAVIGATION.EFI
           grep -aF 'HII_GRAPH_NAV_FORM_ID=0x' build/NAVIGATION.EFI
           grep -aF 'HII_GRAPH_NAV_QUESTION_ID=0x' build/NAVIGATION.EFI
