@@ -165,6 +165,9 @@ static u8 g_nav_prompt_lengths[MAX_HII_NAV_PROMPTS];
 static u8 g_nav_prompt_opcodes[MAX_HII_NAV_PROMPTS];
 static u16 g_nav_prompt_form_ids[MAX_HII_NAV_PROMPTS];
 static u16 g_nav_prompt_question_ids[MAX_HII_NAV_PROMPTS];
+static u16 g_nav_prompt_varstore_ids[MAX_HII_NAV_PROMPTS];
+static u16 g_nav_prompt_var_infos[MAX_HII_NAV_PROMPTS];
+static u8 g_nav_prompt_question_flags[MAX_HII_NAV_PROMPTS];
 static u8 g_nav_prompt_condition_flags[MAX_HII_NAV_PROMPTS];
 static char g_nav_help[MAX_HII_NAV_PROMPTS][33];
 static u8 g_nav_help_lengths[MAX_HII_NAV_PROMPTS];
@@ -1202,6 +1205,7 @@ static int get_hii_string(hii_string_protocol *str, void *handle, u16 token, cha
 
 #ifdef QEV_INTERACTIVE_NAV
 static int nav_prompt_add(u8 opcode, u16 form_id, u16 question_id,
+                          u16 varstore_id, u16 var_info, u8 question_flags,
                           u8 condition_flags,
                           const char *text, u32 count,
                           const char *help, u32 help_count) {
@@ -1211,6 +1215,9 @@ static int nav_prompt_add(u8 opcode, u16 form_id, u16 question_id,
             g_nav_prompt_opcodes[i] != opcode ||
             g_nav_prompt_form_ids[i] != form_id ||
             g_nav_prompt_question_ids[i] != question_id ||
+            g_nav_prompt_varstore_ids[i] != varstore_id ||
+            g_nav_prompt_var_infos[i] != var_info ||
+            g_nav_prompt_question_flags[i] != question_flags ||
             g_nav_prompt_condition_flags[i] != condition_flags ||
             g_nav_help_lengths[i] != (u8)help_count) continue;
         u32 same = 1;
@@ -1235,6 +1242,9 @@ static int nav_prompt_add(u8 opcode, u16 form_id, u16 question_id,
     g_nav_prompt_opcodes[slot] = opcode;
     g_nav_prompt_form_ids[slot] = form_id;
     g_nav_prompt_question_ids[slot] = question_id;
+    g_nav_prompt_varstore_ids[slot] = varstore_id;
+    g_nav_prompt_var_infos[slot] = var_info;
+    g_nav_prompt_question_flags[slot] = question_flags;
     g_nav_prompt_condition_flags[slot] = condition_flags;
     for (u32 j = 0; j < help_count; ++j) g_nav_help[slot][j] = help[j];
     g_nav_help[slot][help_count] = 0;
@@ -1353,10 +1363,17 @@ static int resolve_hii_prompt(void *system_table) {
                         u16 help_token = oplen >= 6u ? rd16(q + 4) : 0u;
                         u16 question_id =
                             ifr_question_opcode(op) && oplen >= 8u ? rd16(q + 6) : 0u;
+                        u16 varstore_id =
+                            ifr_question_opcode(op) && oplen >= 10u ? rd16(q + 8) : 0u;
+                        u16 var_info =
+                            ifr_question_opcode(op) && oplen >= 12u ? rd16(q + 10) : 0u;
+                        u8 question_flags =
+                            ifr_question_opcode(op) && oplen >= 13u ? q[12] : 0u;
                         if (help_token)
                             (void)get_hii_string(str, handle, help_token, help_candidate, &help_count);
                         if (token && get_hii_string(str, handle, token, candidate, &candidate_count)) {
                             nav_prompt_add(op, current_form_id, question_id,
+                                           varstore_id, var_info, question_flags,
                                            active_condition_flags,
                                            candidate, candidate_count,
                                            help_candidate, help_count);
@@ -1399,6 +1416,7 @@ static int resolve_hii_prompt(void *system_table) {
                                      : "HII_GRAPH_NAV_PROMPT_COLLECTION=PASS");
         marker("HII_GRAPH_NAV_FORM_ID_TRACKING=PASS");
         marker("HII_GRAPH_NAV_QUESTION_ID_TRACKING=PASS");
+        marker("HII_GRAPH_NAV_VARSTORE_METADATA=PASS");
         marker("HII_GRAPH_NAV_CONDITION_TRACKING=PASS");
         marker("HII_GRAPH_NAV_SEMANTIC_ROLE=PASS");
         marker(g_nav_help_available ? "HII_GRAPH_NAV_CONTEXT_HELP=PASS"
@@ -1871,6 +1889,15 @@ static int wait_navigation_keys(void *system_table) {
                 serial_puts("\r\n");
                 serial_puts("HII_GRAPH_NAV_QUESTION_ID=0x");
                 serial_hex32((u32)g_nav_prompt_question_ids[g_nav_prompt_index]);
+                serial_puts("\r\n");
+                serial_puts("HII_GRAPH_NAV_VARSTORE_ID=0x");
+                serial_hex32((u32)g_nav_prompt_varstore_ids[g_nav_prompt_index]);
+                serial_puts("\r\n");
+                serial_puts("HII_GRAPH_NAV_VAR_INFO=0x");
+                serial_hex32((u32)g_nav_prompt_var_infos[g_nav_prompt_index]);
+                serial_puts("\r\n");
+                serial_puts("HII_GRAPH_NAV_QUESTION_FLAGS=0x");
+                serial_hex8(g_nav_prompt_question_flags[g_nav_prompt_index]);
                 serial_puts("\r\n");
                 serial_puts("HII_GRAPH_NAV_CONDITION_FLAGS=0x");
                 serial_hex8(g_nav_prompt_condition_flags[g_nav_prompt_index]);
