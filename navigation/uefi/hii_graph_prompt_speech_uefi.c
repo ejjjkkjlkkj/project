@@ -147,6 +147,10 @@ static const efi_guid g_loaded_image_guid =
     {0x5b1b31a1u,0x9562u,0x11d2u,{0x8e,0x3f,0x00,0xa0,0xc9,0x69,0x72,0x3b}};
 static const efi_guid g_simple_fs_guid =
     {0x964e5b22u,0x6459u,0x11d2u,{0x8e,0x39,0x00,0xa0,0xc9,0x69,0x72,0x3b}};
+#ifdef QEV_INTERACTIVE_NAV
+static const efi_guid g_m1603qa_308_setup_package_list_guid =
+    {0x899407d7u,0x99feu,0x43d8u,{0x9a,0x21,0x79,0xec,0x32,0x8c,0xac,0x21}};
+#endif
 
 static u8 g_hii_package[1024u * 1024u];
 static void *g_hii_handles[256];
@@ -169,6 +173,7 @@ static u16 g_nav_prompt_varstore_ids[MAX_HII_NAV_PROMPTS];
 static u16 g_nav_prompt_var_infos[MAX_HII_NAV_PROMPTS];
 static u8 g_nav_prompt_question_flags[MAX_HII_NAV_PROMPTS];
 static u8 g_nav_prompt_condition_flags[MAX_HII_NAV_PROMPTS];
+static u16 g_nav_ref_form_ids[MAX_HII_NAV_PROMPTS];
 static char g_nav_help[MAX_HII_NAV_PROMPTS][33];
 static u8 g_nav_help_lengths[MAX_HII_NAV_PROMPTS];
 static u8 g_nav_prompt_total;
@@ -180,6 +185,14 @@ static u8 g_nav_speech_length;
 static char g_nav_help_text[33];
 static u8 g_nav_help_length;
 static u8 g_nav_help_available;
+static u16 g_nav_current_form_id;
+static char g_nav_form_title[33];
+static u8 g_nav_form_title_length;
+static u16 g_nav_form_history[16];
+static u8 g_nav_form_history_depth;
+static hii_string_protocol *g_nav_hii_string;
+static void *g_nav_hii_handle;
+static u8 g_nav_m1603qa_308_profile;
 static u8 g_nav_event_mask;
 static u8 g_nav_speech_events;
 static u8 g_nav_realtime_events;
@@ -1027,6 +1040,16 @@ static u16 rd16(const u8 *p) {
 static u32 rd32(const u8 *p) {
     return (u32)p[0] | ((u32)p[1] << 8) | ((u32)p[2] << 16) | ((u32)p[3] << 24);
 }
+#ifdef QEV_INTERACTIVE_NAV
+static int guid_bytes_equal(const u8 *p, const efi_guid *g) {
+    if (!p || !g) return 0;
+    if (rd32(p) != g->data1 || rd16(p + 4) != g->data2 || rd16(p + 6) != g->data3)
+        return 0;
+    for (u32 i = 0; i < 8u; ++i)
+        if (p[8u + i] != g->data4[i]) return 0;
+    return 1;
+}
+#endif
 static int prompt_opcode(u8 op) {
     switch (op) {
         case 0x02: case 0x03: case 0x05: case 0x06: case 0x07:
@@ -1208,7 +1231,8 @@ static int nav_prompt_add(u8 opcode, u16 form_id, u16 question_id,
                           u16 varstore_id, u16 var_info, u8 question_flags,
                           u8 condition_flags,
                           const char *text, u32 count,
-                          const char *help, u32 help_count) {
+                          const char *help, u32 help_count,
+                          u16 ref_form_id) {
     if (!text || !count || count > 32u || help_count > 32u) return 0;
     for (u8 i = 0; i < g_nav_prompt_total; ++i) {
         if (g_nav_prompt_lengths[i] != (u8)count ||
@@ -1219,6 +1243,7 @@ static int nav_prompt_add(u8 opcode, u16 form_id, u16 question_id,
             g_nav_prompt_var_infos[i] != var_info ||
             g_nav_prompt_question_flags[i] != question_flags ||
             g_nav_prompt_condition_flags[i] != condition_flags ||
+            g_nav_ref_form_ids[i] != ref_form_id ||
             g_nav_help_lengths[i] != (u8)help_count) continue;
         u32 same = 1;
         for (u32 j = 0; j < count; ++j) {
@@ -1246,6 +1271,7 @@ static int nav_prompt_add(u8 opcode, u16 form_id, u16 question_id,
     g_nav_prompt_var_infos[slot] = var_info;
     g_nav_prompt_question_flags[slot] = question_flags;
     g_nav_prompt_condition_flags[slot] = condition_flags;
+    g_nav_ref_form_ids[slot] = ref_form_id;
     for (u32 j = 0; j < help_count; ++j) g_nav_help[slot][j] = help[j];
     g_nav_help[slot][help_count] = 0;
     g_nav_help_lengths[slot] = (u8)help_count;
@@ -1376,7 +1402,8 @@ static int resolve_hii_prompt(void *system_table) {
                                            varstore_id, var_info, question_flags,
                                            active_condition_flags,
                                            candidate, candidate_count,
-                                           help_candidate, help_count);
+                                           help_candidate, help_count,
+                                           (op == 0x0fu && oplen >= 15u) ? rd16(q + 13) : 0u);
                         }
 #else
                         if (token && get_hii_string(str, handle, token, g_prompt_text, &g_prompt_count)) {
