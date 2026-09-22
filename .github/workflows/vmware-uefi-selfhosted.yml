@@ -19,7 +19,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
 
-      - name: Detect or install VMware Workstation
+      - name: Verify VMware Workstation
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -37,16 +37,7 @@ jobs:
 
           $vmrun = Find-Vmrun
           if (-not $vmrun) {
-            $winget = Get-Command winget.exe -ErrorAction SilentlyContinue
-            if (-not $winget) {
-              throw "VMware Workstation is missing and winget is unavailable on this self-hosted runner."
-            }
-            winget install --id VMware.WorkstationPro -e --source winget --accept-package-agreements --accept-source-agreements --silent --disable-interactivity
-            $vmrun = Find-Vmrun
-          }
-
-          if (-not $vmrun) {
-            throw "VMware Workstation installation did not produce vmrun.exe."
+            throw "VMware Workstation is not installed on this trusted runner. Install it from the Broadcom Support Portal, then rerun this workflow."
           }
 
           $auth = Get-Service -Name VMAuthdService -ErrorAction SilentlyContinue
