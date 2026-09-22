@@ -85,3 +85,8 @@ The reader now preserves metadata for `OneOf`, `Numeric`, `String`, `Password`, 
 Password questions have a hard privacy rule: the reader announces **protected** and does not attempt to read the underlying VarStore value for speech. Preview changes are still RAM-only. When a staged choice, checkbox, or numeric control affects a `SuppressIf`, `GrayOutIf`, or `DisableIf` expression, `R` and the automatic post-edit refresh evaluate the dependency using the staged value so the previewed form structure matches the proposed setting without writing firmware.
 
 Question-header flags are also semantic: `READ_ONLY`, `CALLBACK`, `RESET_REQUIRED`, `RECONNECT_REQUIRED`, and `OPTIONS_ONLY` are tracked. Read-only questions cannot be staged; callback/reset/reconnect requirements are exposed through control details so a future commit transaction cannot silently bypass firmware behavior.
+
+
+### Long HII speech
+
+Normalized HII labels, option names, form titles, and contextual help can now retain up to 64 characters. The HDA renderer still keeps each low-level DMA synthesis chunk at 32 characters, but a phrase queue splits longer utterances at word boundaries, automatically starts the next chunk, and remains interruptible on every new navigation event. The same queue is used by blocking boot-proof speech and realtime focus speech, while reusing the existing DMA allocation.
