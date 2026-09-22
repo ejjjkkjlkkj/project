@@ -1180,6 +1180,11 @@ static int speech_dma_begin(const char *text, u32 text_count) {
        keyboard focus can cancel the current utterance immediately. */
     u64 play_us = (((u64)dma_payload * 125ull) + 23ull) / 24ull;
     play_us += 150000ull;
+    /* Short whole-word clips can reach the controller before QEMU/real HDA
+       advances LPIB. Keep completion interrupt-driven but give startup a
+       generous floor; keyboard interruption remains immediate and async. */
+    if (play_us < 2000000ull) play_us = 2000000ull;
+    marker("HII_GRAPH_SPEECH_SHORT_CLIP_TIMEOUT_FLOOR=PASS");
     if (play_us > 30000000ull) {
         speech_dma_stop();
         return 0;
