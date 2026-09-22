@@ -44,6 +44,14 @@ jobs:
           ./sr-hii-selftest | tee hii-proof.txt
           grep -F 'UEFI_HII_IFR_MODEL=PASS' hii-proof.txt
 
+      - name: Host native UEFI HII collector self-test
+        working-directory: screenreader/uefi
+        run: |
+          set -euo pipefail
+          cc -std=c11 -O2 -Wall -Wextra -Werror             sr_hii_ifr.c sr_uefi_hii.c sr_uefi_hii_selftest.c             -o sr-uefi-hii-selftest
+          ./sr-uefi-hii-selftest | tee uefi-hii-proof.txt
+          grep -F 'UEFI_HII_COLLECTOR=PASS' uefi-hii-proof.txt
+
       - name: Validate quality voice bank packer
         working-directory: screenreader/uefi
         run: |
