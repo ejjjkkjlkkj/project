@@ -2355,7 +2355,16 @@ __attribute__((ms_abi)) u64 efi_main(void *image_handle, void *system_table) {
     marker("BDL_RUNTIME_TEXT_SCHEDULE=PASS");
 
 #ifdef QEV_INTERACTIVE_NAV
-    if (!run_speech_dma(g_nav_speech_text, g_nav_speech_length)) {
+    const char *initial_speech = g_nav_speech_text;
+    u8 initial_speech_length = g_nav_speech_length;
+    if (nav_build_focus_value_speech(system_table, g_nav_prompt_index,
+                                     g_nav_focus_value_text,
+                                     &g_nav_focus_value_length)) {
+        initial_speech = g_nav_focus_value_text;
+        initial_speech_length = g_nav_focus_value_length;
+        marker("HII_GRAPH_NAV_INITIAL_VALUE_SPEECH=PASS");
+    }
+    if (!run_speech_dma(initial_speech, initial_speech_length)) {
 #else
     if (!run_speech_dma(g_prompt_text, g_prompt_count)) {
 #endif
@@ -2368,7 +2377,7 @@ __attribute__((ms_abi)) u64 efi_main(void *image_handle, void *system_table) {
     marker("LPIB_PROGRESS=PASS");
     marker("HII_GRAPH_NAV_REALTIME_CAPABLE=PASS");
 #ifdef QEV_INTERACTIVE_NAV
-    marker("HII_GRAPH_NAV_SEMANTIC_SPEECH=ROLE_PLUS_LABEL");
+    marker("HII_GRAPH_NAV_SEMANTIC_SPEECH=ROLE_LABEL_VALUE");
 #endif
     if (g_controller_preferred && g_codec_vendor_id == 0x10ec0256u) {
         marker("PHYSICAL_ASUS_M1603QA_HDA_RUNTIME=PASS");
