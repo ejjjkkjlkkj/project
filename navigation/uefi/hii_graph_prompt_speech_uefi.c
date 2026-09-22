@@ -233,6 +233,8 @@ static char g_nav_focus_speech[33];
 static u8 g_nav_focus_speech_length;
 static char g_nav_position_text[33];
 static u8 g_nav_position_length;
+static char g_nav_where_text[33];
+static u8 g_nav_where_length;
 static u8 g_nav_help_available;
 static u16 g_nav_current_form_id;
 static char g_nav_form_title[33];
@@ -1369,6 +1371,39 @@ static int nav_build_position_speech(u8 prompt_index, char *out, u8 *length_out)
     n = nav_append_decimal(out, n, 32u, (u32)prompt_index + 1u);
     for (u8 i = 0u; middle[i] && n < 32u; ++i) out[n++] = middle[i];
     n = nav_append_decimal(out, n, 32u, (u32)g_nav_prompt_total);
+    out[n] = 0;
+    *length_out = n;
+    return n != 0u;
+}
+
+static int nav_build_where_am_i_speech(void *system_table, u8 prompt_index,
+                                      char *out, u8 *length_out) {
+    if (!system_table || !out || !length_out ||
+        prompt_index >= g_nav_prompt_total) return 0;
+
+    const char *value_text = 0;
+    u8 value_length = 0u;
+    u8 checkbox_state = 0u;
+    int have_value = nav_live_value_text(system_table, prompt_index,
+                                         &value_text, &value_length,
+                                         &checkbox_state);
+    if (!have_value) value_length = 0u;
+    u8 suffix_budget = value_length ? (u8)(value_length + 1u) : 0u;
+    if (suffix_budget > 20u) suffix_budget = 20u;
+    u8 prefix_budget = (u8)(32u - suffix_budget);
+    u8 n = 0u;
+
+    for (u8 i = 0u; i < g_nav_form_title_length && n < prefix_budget; ++i)
+        out[n++] = g_nav_form_title[i];
+    if (n < prefix_budget && g_nav_prompt_lengths[prompt_index]) out[n++] = ' ';
+    for (u8 i = 0u; i < g_nav_prompt_lengths[prompt_index] && n < prefix_budget; ++i)
+        out[n++] = g_nav_prompts[prompt_index][i];
+
+    if (value_length && value_text) {
+        if (n && n < 32u) out[n++] = ' ';
+        for (u8 i = 0u; i < value_length && n < 32u; ++i)
+            out[n++] = value_text[i];
+    }
     out[n] = 0;
     *length_out = n;
     return n != 0u;
@@ -2708,6 +2743,13 @@ static int wait_navigation_keys(void *system_table) {
             }
             if (key.unicode_char == (u16)'w' || key.unicode_char == (u16)'W') {
                 marker("HII_GRAPH_NAV_KEY=W");
+                if (nav_build_where_am_i_speech(system_table, g_nav_prompt_index,
+                                                g_nav_where_text,
+                                                &g_nav_where_length)) {
+                    speech_override = g_nav_where_text;
+                    speech_override_length = g_nav_where_length;
+                    marker("HII_GRAPH_NAV_WHERE_AM_I_CONTEXT=PASS");
+                }
                 marker("HII_GRAPH_NAV_WHERE_AM_I=PASS");
                 speak = 1;
             } else if (key.unicode_char == (u16)'f' || key.unicode_char == (u16)'F') {
