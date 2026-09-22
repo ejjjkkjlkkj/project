@@ -40,7 +40,6 @@ jobs:
           (cd navigation/uefi && python test_generate_units.py)
           (cd navigation/uefi && python test_navigation_source_contract.py)
           (cd navigation/uefi && python test_m1603qa_308_baseline.py)
-          (cd navigation/uefi && python test_m1603qa_308_baseline.py)
           python navigation/uefi/generate_units.py build/navigation_units.c build/navigation_units.txt
           grep -F 'source=voice/uefi_units/build_native_units.py' build/navigation_units.txt
           grep -F 'speech-mode=clear-lettername-spelling-fr-v3' build/navigation_units.txt
