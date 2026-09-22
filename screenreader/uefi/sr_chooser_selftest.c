@@ -65,6 +65,7 @@ int main(void) {
 
     if (!ok(sr_chooser_open(&chooser, &rt), "reopen")) return 1;
     if (!ok(sr_chooser_type(&chooser, &rt, 'n'), "filter n")) return 1;
+    if (!ok(sr_chooser_type(&chooser, &rt, 'o'), "filter no")) return 1;
     if (!ok(rt.focus_index == 3u, "name item selected")) return 1;
     key.unicode_char = 0x000du;
     if (!ok(sr_chooser_handle_key(&chooser, &rt, key), "accept")) return 1;
