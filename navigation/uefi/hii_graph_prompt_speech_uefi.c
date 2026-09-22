@@ -1210,11 +1210,23 @@ static int speech_dma_poll(u64 elapsed_step_us, u8 *progress_out) {
     u32 lpib = *(volatile u32 *)(sd + 0x04);
     if (lpib && progress_out) *progress_out = 1;
     u8 status = sd[3];
-    if (status & 0x04u) {
-        int ok = lpib != 0;
-        if (!ok) marker("HII_GRAPH_SPEECH_DMA_FAIL=BCIS_ZERO_LPIB");
+    if (status & 0x18u) {
+        marker("HII_GRAPH_SPEECH_DMA_FAIL=STREAM_ERROR");
         speech_dma_stop();
-        return ok ? 1 : -1;
+        return -1;
+    }
+    if (status & 0x04u) {
+        if (lpib != 0u) {
+            speech_dma_stop();
+            return 1;
+        }
+        /* A stale BCIS can survive the previous clip/reset on QEMU and some
+           HDA implementations. It is not completion of the new clip when
+           LPIB has never advanced. W1C it and keep polling; the normal timeout
+           remains the fail-safe if DMA really does not start. */
+        sd[3] = 0x04u;
+        fence();
+        marker("HII_GRAPH_SPEECH_STALE_BCIS_CLEARED=PASS");
     }
 
     if (elapsed_step_us > g_speech_timeout_us - g_speech_elapsed_us)
