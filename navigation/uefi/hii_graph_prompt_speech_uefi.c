@@ -3409,6 +3409,14 @@ static int wait_navigation_keys(void *system_table) {
                         marker("HII_GRAPH_NAV_REQUIRED_EVENTS=PASS");
                     else
                         marker("HII_GRAPH_NAV_REQUIRED_EVENTS=PENDING_NONBLOCKING");
+                    if (nav_stage_count()) {
+                        static const char discard_speech[] = "preview edits discarded";
+                        nav_stage_clear_all();
+                        if (run_speech_dma(discard_speech, 23u))
+                            marker("HII_GRAPH_NAV_EXIT_DISCARD_SPEECH=PASS");
+                        else
+                            marker("HII_GRAPH_NAV_EXIT_DISCARD_SPEECH=FAILED");
+                    }
                     marker("HII_GRAPH_NAV_SIMPLE_EXIT=PASS");
                     marker("HII_GRAPH_NAV_EXIT=PASS");
                     return 1;
