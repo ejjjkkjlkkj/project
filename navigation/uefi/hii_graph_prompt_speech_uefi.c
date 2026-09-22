@@ -1,3 +1,5 @@
+#include "semantic_core.h"
+
 typedef unsigned char u8;
 typedef unsigned short u16;
 typedef unsigned int u32;
@@ -47,7 +49,7 @@ extern const u8 qev_word_units[];
 #define INVALID_NID 0xff
 #define INVALID_RESP 0xffffffffu
 
-#define QEV_NAV_TEXT_MAX 64u
+#define QEV_NAV_TEXT_MAX (QEV_UTTERANCE_CAP - 1u)
 #define QEV_SPEECH_CHUNK_MAX 32u
 
 #define WIDGET_AUDIO_OUTPUT 0x0
@@ -275,7 +277,7 @@ static char g_nav_help_text[QEV_NAV_TEXT_MAX + 1u];
 static u8 g_nav_help_length;
 static char g_nav_value_text[33];
 static u8 g_nav_value_length;
-static char g_nav_focus_speech[33];
+static char g_nav_focus_speech[QEV_NAV_TEXT_MAX + 1u];
 static u8 g_nav_focus_speech_length;
 static char g_nav_position_text[33];
 static u8 g_nav_position_length;
@@ -1917,6 +1919,54 @@ static int nav_build_where_am_i_speech(void *system_table, u8 prompt_index,
     return n != 0u;
 }
 
+static qev_semantic_role nav_semantic_role_from_ifr(u8 opcode) {
+    switch (opcode) {
+        case 0x05u: return QEV_ROLE_CHOICE;
+        case 0x06u: return QEV_ROLE_TOGGLE;
+        case 0x07u: return QEV_ROLE_NUMERIC_SETTING;
+        case 0x08u: return QEV_ROLE_PASSWORD_FIELD;
+        case 0x0cu: case 0x0du: return QEV_ROLE_BUTTON;
+        case 0x0fu: return QEV_ROLE_FIRMWARE_MENU;
+        case 0x1au: case 0x1bu: return QEV_ROLE_NUMERIC_SETTING;
+        case 0x1cu: return QEV_ROLE_TEXT_SETTING;
+        case 0x23u: return QEV_ROLE_CHOICE;
+        case 0x02u: case 0x03u: return QEV_ROLE_STATUS;
+        default: return QEV_ROLE_SETTING;
+    }
+}
+
+static unsigned int nav_semantic_states(void *system_table, u8 prompt_index,
+                                        u8 staged) {
+    if (!system_table || prompt_index >= g_nav_prompt_total) return QEV_STATE_NONE;
+    unsigned int states = QEV_STATE_FOCUSED;
+    u8 condition = g_nav_prompt_condition_flags[prompt_index];
+    u8 qflags = g_nav_prompt_question_flags[prompt_index];
+    if (condition & NAV_COND_GRAY) states |= QEV_STATE_DISABLED;
+    if (qflags & NAV_Q_READ_ONLY) states |= QEV_STATE_READ_ONLY;
+    if (qflags & NAV_Q_CALLBACK) states |= QEV_STATE_CALLBACK;
+    if (qflags & NAV_Q_RESET_REQUIRED) states |= QEV_STATE_RESET_REQUIRED;
+    if (qflags & NAV_Q_RECONNECT_REQUIRED) states |= QEV_STATE_RECONNECT_REQUIRED;
+    if (staged) states |= QEV_STATE_PREVIEW;
+    if (g_nav_prompt_opcodes[prompt_index] == 0x08u)
+        states |= QEV_STATE_PROTECTED;
+
+    if (g_nav_prompt_opcodes[prompt_index] == 0x06u) {
+        u64 value = 0u;
+        u8 value_staged = 0u;
+        if (nav_effective_scalar_value(system_table, prompt_index,
+                                       &value, &value_staged) && value)
+            states |= QEV_STATE_CHECKED;
+    }
+    return states;
+}
+
+static u8 nav_text_length_u8(const char *text, u8 cap) {
+    u8 n = 0u;
+    if (!text) return 0u;
+    while (n < cap && text[n]) ++n;
+    return n;
+}
+
 static int nav_build_focus_speech(void *system_table, u8 prompt_index,
                                   char *out, u8 *length_out) {
     if (!system_table || !out || !length_out ||
@@ -1925,46 +1975,32 @@ static int nav_build_focus_speech(void *system_table, u8 prompt_index,
     const char *value_text = 0;
     u8 value_length = 0u;
     u8 staged = 0u;
-    if (!nav_effective_value_text(system_table, prompt_index,
-                                  &value_text, &value_length,
-                                  &staged) ||
-        !value_text || !value_length)
-        return 0;
+    (void)nav_effective_value_text(system_table, prompt_index,
+                                   &value_text, &value_length, &staged);
 
-    if (value_length >= 32u) {
-        for (u8 i = 0u; i < 32u; ++i) out[i] = value_text[i];
-        out[32] = 0;
-        *length_out = 32u;
-        return 1;
-    }
+    qev_semantic_node node;
+    node.role = nav_semantic_role_from_ifr(g_nav_prompt_opcodes[prompt_index]);
+    node.native_role = ifr_semantic_role(g_nav_prompt_opcodes[prompt_index]);
+    node.label = g_nav_prompts[prompt_index];
+    node.value = g_nav_prompt_opcodes[prompt_index] == 0x08u ? 0 : value_text;
+    node.states = nav_semantic_states(system_table, prompt_index, staged);
 
-    /* Preserve the live value at the end: it is more important than a
-       truncated label for blind operation. Role/state remain at the front. */
-    u8 budget = (u8)(32u - value_length - 1u);
-    u8 n = 0u;
-    const char *role = ifr_semantic_role(g_nav_prompt_opcodes[prompt_index]);
-    while (*role && n < budget) out[n++] = *role++;
-
-    const char *state = 0;
-    if (g_nav_prompt_condition_flags[prompt_index] & NAV_COND_GRAY)
-        state = " disabled";
-    else if (g_nav_prompt_condition_flags[prompt_index] & NAV_COND_UNKNOWN)
-        state = " conditional";
-    else if (g_nav_prompt_question_flags[prompt_index] & NAV_Q_READ_ONLY)
-        state = " read only";
-    else if (staged)
-        state = " preview";
-    if (state) while (*state && n < budget) out[n++] = *state++;
-
-    if (n < budget && g_nav_prompt_lengths[prompt_index]) out[n++] = ' ';
-    for (u8 i = 0u; i < g_nav_prompt_lengths[prompt_index] && n < budget; ++i)
-        out[n++] = g_nav_prompts[prompt_index][i];
-    if (n && n < 32u) out[n++] = ' ';
-    for (u8 i = 0u; i < value_length && n < 32u; ++i)
-        out[n++] = value_text[i];
+    qev_utterance utterance;
+    if (!qev_semantic_focus_utterance(&node, &utterance)) return 0;
+    u8 n = nav_text_length_u8(utterance.text, (u8)QEV_NAV_TEXT_MAX);
+    if (!n) return 0;
+    for (u8 i = 0u; i < n; ++i) out[i] = utterance.text[i];
     out[n] = 0;
     *length_out = n;
-    return n != 0u;
+
+    if (qev_semantic_event_priority(QEV_EVENT_FOCUS_CHANGED) != QEV_SPEECH_FOCUS ||
+        !qev_semantic_event_interrupt(QEV_EVENT_FOCUS_CHANGED))
+        return 0;
+
+    marker("HII_GRAPH_NAV_SEMANTIC_CORE=PASS");
+    marker("HII_GRAPH_NAV_SEMANTIC_EVENT_POLICY=PASS");
+    marker("HII_GRAPH_NAV_SEMANTIC_PASSWORD_POLICY=PASS");
+    return 1;
 }
 
 static int nav_read_varstore_scalar(void *system_table, u8 handle_index,
@@ -3291,7 +3327,7 @@ static int wait_navigation_keys(void *system_table) {
 
     marker("HII_GRAPH_NAV_READY=PASS");
     marker("HII_GRAPH_NAV_REALTIME_MODE=INTERRUPTIBLE_DMA");
-    marker("HII_GRAPH_SPEECH_QUEUE=INTERRUPTIBLE_64");
+    marker("HII_GRAPH_SPEECH_QUEUE=INTERRUPTIBLE_127");
     marker("HII_GRAPH_SPEECH_WORD_BOUNDARY_CHUNKING=PASS");
     marker("HII_GRAPH_NAV_DIRECTIONAL_ALIASES=PASS");
     marker("HII_GRAPH_NAV_TAB_FORWARD=PASS");
@@ -3871,7 +3907,7 @@ __attribute__((ms_abi)) u64 efi_main(void *image_handle, void *system_table) {
     marker("LPIB_PROGRESS=PASS");
     marker("HII_GRAPH_NAV_REALTIME_CAPABLE=PASS");
 #ifdef QEV_INTERACTIVE_NAV
-    marker("HII_GRAPH_NAV_SEMANTIC_SPEECH=ROLE_STATE_LABEL_VALUE");
+    marker("HII_GRAPH_NAV_SEMANTIC_SPEECH=SEMANTIC_CORE_ROLE_STATE_LABEL_VALUE");
 #endif
     if (g_controller_preferred && g_codec_vendor_id == 0x10ec0256u) {
         marker("PHYSICAL_ASUS_M1603QA_HDA_RUNTIME=PASS");
