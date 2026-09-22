@@ -33,6 +33,8 @@ required = (
     'HII_GRAPH_SPEECH_SHORT_CLIP_TIMEOUT_FLOOR=PASS',
     'HII_GRAPH_SPEECH_STREAM_RESET_PER_CHUNK=PASS',
     'HII_GRAPH_SPEECH_STALE_BCIS_CLEARED=PASS',
+    'dma_pages = 4096u',
+    'entries >= 256u',
     'phoneme_gap_bytes = 0u',
     'grapheme_gap_bytes = 18u * 192u',
     'HII_GRAPH_SPEECH_CONTINUOUS_PHONEMES=PASS',
@@ -41,7 +43,7 @@ required = (
     'HII_GRAPH_SPEECH_CHUNK_CONTINUE=PASS',
     'HII_GRAPH_SPEECH_PHRASE_COMPLETE=PASS',
     'QEV_NAV_TEXT_MAX 64u',
-    'QEV_SPEECH_CHUNK_MAX 32u',
+    'QEV_SPEECH_CHUNK_MAX 64u',
     'speech_phrase_begin',
     'speech_phrase_poll',
     'speech_phrase_cancel',
@@ -332,7 +334,7 @@ assert "g_nav_prompt_opcodes[prompt_index] != 0x07u" in ss
 
 
 # HII text may be retained beyond one DMA chunk, but each low-level DMA build
-# remains bounded to 32 characters and navigation uses the phrase queue.
+# accepts the full 64-character navigation phrase in one DMA stream.
 norm_start = text.index("static int normalize_prompt")
 norm_end = text.index("static int get_hii_string", norm_start)
 norm = text[norm_start:norm_end]
@@ -341,7 +343,7 @@ assert "QEV_NAV_TEXT_MAX" in norm
 dma_start = text.index("static int speech_dma_begin")
 dma_end = text.index("static int speech_dma_poll", dma_start)
 dma = text[dma_start:dma_end]
-assert "text_count > 32u" in dma
+assert "text_count > QEV_SPEECH_CHUNK_MAX" in dma
 
 wait_start = text.index("static int wait_navigation_keys")
 wait_end = text.index("#endif", wait_start)
