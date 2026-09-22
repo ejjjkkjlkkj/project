@@ -64,6 +64,29 @@ static void test_empty_node_is_silent(void) {
     assert(out.text[0] == 0);
 }
 
+
+static void assert_firmware_alphabet(const char *text) {
+    assert(text != 0);
+    for (; *text; ++text) {
+        unsigned char ch = (unsigned char)*text;
+        assert((ch >= (unsigned char)'a' && ch <= (unsigned char)'z') ||
+               (ch >= (unsigned char)'A' && ch <= (unsigned char)'Z') ||
+               (ch >= (unsigned char)'0' && ch <= (unsigned char)'9') ||
+               ch == (unsigned char)' ');
+    }
+}
+
+static void test_firmware_alphabet_only(void) {
+    qev_semantic_node node = {
+        QEV_ROLE_PASSWORD_FIELD, 0, "Admin Password", "never-spoken",
+        QEV_STATE_PROTECTED | QEV_STATE_READ_ONLY | QEV_STATE_RESET_REQUIRED
+    };
+    qev_utterance out;
+    assert(qev_semantic_focus_utterance(&node, &out));
+    assert_firmware_alphabet(out.text);
+    assert(strstr(out.text, "never-spoken") == 0);
+}
+
 static void test_truncation_is_nul_safe(void) {
     static const char long_label[] =
         "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
@@ -84,6 +107,7 @@ int main(void) {
     test_unknown_native_role_fallback();
     test_event_policy();
     test_empty_node_is_silent();
+    test_firmware_alphabet_only();
     test_truncation_is_nul_safe();
     puts("UEFI_SEMANTIC_CORE_TESTS=PASS");
     return 0;
