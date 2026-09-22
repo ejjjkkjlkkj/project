@@ -2605,9 +2605,20 @@ static int wait_navigation_keys(void *system_table) {
             }
             if (key.unicode_char == 0x000du) {
                 marker("HII_GRAPH_NAV_KEY=ENTER");
+                u8 current_condition = g_nav_prompt_condition_flags[g_nav_prompt_index];
                 u16 target = g_nav_ref_form_ids[g_nav_prompt_index];
-                if (g_nav_m1603qa_308_profile && target &&
-                    target != g_nav_current_form_id) {
+                if (current_condition & NAV_COND_GRAY) {
+                    marker("HII_GRAPH_NAV_DISABLED_ACTION=BLOCKED");
+                    speech_override = "disabled";
+                    speech_override_length = 8u;
+                    speak = 1;
+                } else if (current_condition & NAV_COND_UNKNOWN) {
+                    marker("HII_GRAPH_NAV_CONDITIONAL_ACTION=BLOCKED");
+                    speech_override = "conditional";
+                    speech_override_length = 11u;
+                    speak = 1;
+                } else if (g_nav_m1603qa_308_profile && target &&
+                           target != g_nav_current_form_id) {
                     u16 previous = g_nav_current_form_id;
                     if (g_nav_form_history_depth >= 16u) return 0;
                     g_nav_form_history[g_nav_form_history_depth++] = previous;
