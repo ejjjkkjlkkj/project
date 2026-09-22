@@ -209,8 +209,7 @@ static int export_block(sr_uefi_config *config,
     store = sr_hii_find_varstore(config->model, binding->varstore_id);
     width = binding_width(binding);
     if (!store || store->opcode != 0x24u || !width ||
-        (sr_u32)binding->varstore_info + width > store->size ||
-        store->size > sizeof(g_config_block)) return 0;
+        (sr_u32)binding->varstore_info + width > store->size) return 0;
 
     routing = (sr_hii_config_routing_protocol *)config->routing;
     if (!routing->export_config || !routing->config_to_block) return 0;
