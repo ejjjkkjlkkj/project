@@ -33,6 +33,13 @@ jobs:
           python test_native_speech_v4.py
           python test_voicecore_v4.py
 
+      - name: Test UEFI semantic core
+        run: |
+          set -euo pipefail
+          mkdir -p build
+          cc -std=c11 -Wall -Wextra -Werror navigation/uefi/semantic_core.c navigation/uefi/test_semantic_core.c -o build/test-semantic-core
+          ./build/test-semantic-core
+
       - name: Generate UEFI navigation speech units
         run: |
           set -euo pipefail
@@ -54,11 +61,12 @@ jobs:
           sudo apt-get install -y clang lld
           flags='--target=x86_64-pc-windows-msvc -DQEV_INTERACTIVE_NAV=1 -ffreestanding -fshort-wchar -fno-stack-protector -fno-builtin -mno-red-zone -nostdlib -O2 -Wall -Wextra -Werror'
           clang $flags -c navigation/uefi/hii_graph_prompt_speech_uefi.c -o build/navigation.obj
+          clang $flags -c navigation/uefi/semantic_core.c -o build/semantic_core.obj
           clang $flags -c build/navigation_units.c -o build/navigation_units.obj
-          lld-link /subsystem:efi_application /entry:efi_main /nodefaultlib /machine:x64 /timestamp:0 /out:build/NAVIGATION.EFI build/navigation.obj build/navigation_units.obj
+          lld-link /subsystem:efi_application /entry:efi_main /nodefaultlib /machine:x64 /timestamp:0 /out:build/NAVIGATION.EFI build/navigation.obj build/semantic_core.obj build/navigation_units.obj
           test -s build/NAVIGATION.EFI
           grep -aF 'HII_GRAPH_NAV_REALTIME_MODE=INTERRUPTIBLE_DMA' build/NAVIGATION.EFI
-          grep -aF 'HII_GRAPH_SPEECH_QUEUE=INTERRUPTIBLE_64' build/NAVIGATION.EFI
+          grep -aF 'HII_GRAPH_SPEECH_QUEUE=INTERRUPTIBLE_127' build/NAVIGATION.EFI
           grep -aF 'HII_GRAPH_SPEECH_WORD_BOUNDARY_CHUNKING=PASS' build/NAVIGATION.EFI
           grep -aF 'HII_GRAPH_SPEECH_HYBRID_WORD_MODE=PASS' build/NAVIGATION.EFI
           grep -aF 'HII_GRAPH_SPEECH_WORD_PRONUNCIATION=PASS' build/NAVIGATION.EFI
@@ -92,7 +100,10 @@ jobs:
           grep -aF 'HII_GRAPH_NAV_LIVE_VALUE_READ=PASS' build/NAVIGATION.EFI
           grep -aF 'HII_GRAPH_NAV_FOCUS_VALUE_SPEECH=PASS' build/NAVIGATION.EFI
           grep -aF 'HII_GRAPH_NAV_INITIAL_VALUE_SPEECH=PASS' build/NAVIGATION.EFI
-          grep -aF 'HII_GRAPH_NAV_SEMANTIC_SPEECH=ROLE_STATE_LABEL_VALUE' build/NAVIGATION.EFI
+          grep -aF 'HII_GRAPH_NAV_SEMANTIC_SPEECH=SEMANTIC_CORE_ROLE_STATE_LABEL_VALUE' build/NAVIGATION.EFI
+          grep -aF 'HII_GRAPH_NAV_SEMANTIC_CORE=PASS' build/NAVIGATION.EFI
+          grep -aF 'HII_GRAPH_NAV_SEMANTIC_EVENT_POLICY=PASS' build/NAVIGATION.EFI
+          grep -aF 'HII_GRAPH_NAV_SEMANTIC_PASSWORD_POLICY=PASS' build/NAVIGATION.EFI
           grep -aF 'HII_GRAPH_NAV_PROFILE=M1603QA_BIOS_308' build/NAVIGATION.EFI
           grep -aF 'HII_GRAPH_NAV_PACKAGE_GUID_MATCH=PASS' build/NAVIGATION.EFI
           grep -aF 'HII_GRAPH_NAV_ROOT_FORM_2710=PASS' build/NAVIGATION.EFI
