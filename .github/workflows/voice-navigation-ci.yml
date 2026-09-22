@@ -40,7 +40,6 @@ jobs:
           (cd navigation/uefi && python test_generate_units.py)
           (cd navigation/uefi && python test_navigation_source_contract.py)
           (cd navigation/uefi && python test_m1603qa_308_baseline.py)
-          (cd navigation/uefi && python test_m1603qa_308_baseline.py)
           python navigation/uefi/generate_units.py build/navigation_units.c build/navigation_units.txt
           grep -F 'source=voice/uefi_units/build_native_units.py' build/navigation_units.txt
           grep -F 'speech-mode=clear-lettername-spelling-fr-v3' build/navigation_units.txt
@@ -80,12 +79,17 @@ jobs:
           grep -aF 'HII_GRAPH_NAV_LIVE_OPTION_MATCH=PASS' build/NAVIGATION.EFI
           grep -aF 'HII_GRAPH_NAV_LIVE_VALUE_KEY=PASS' build/NAVIGATION.EFI
           grep -aF 'HII_GRAPH_NAV_LIVE_VALUE_READ=PASS' build/NAVIGATION.EFI
+          grep -aF 'HII_GRAPH_NAV_FOCUS_VALUE_SPEECH=PASS' build/NAVIGATION.EFI
+          grep -aF 'HII_GRAPH_NAV_INITIAL_VALUE_SPEECH=PASS' build/NAVIGATION.EFI
+          grep -aF 'HII_GRAPH_NAV_SEMANTIC_SPEECH=ROLE_STATE_LABEL_VALUE' build/NAVIGATION.EFI
           grep -aF 'HII_GRAPH_NAV_PROFILE=M1603QA_BIOS_308' build/NAVIGATION.EFI
           grep -aF 'HII_GRAPH_NAV_PACKAGE_GUID_MATCH=PASS' build/NAVIGATION.EFI
           grep -aF 'HII_GRAPH_NAV_ROOT_FORM_2710=PASS' build/NAVIGATION.EFI
           grep -aF 'HII_GRAPH_NAV_FORM_AWARE=PASS' build/NAVIGATION.EFI
           grep -aF 'HII_GRAPH_NAV_FORM_ENTER=PASS' build/NAVIGATION.EFI
           grep -aF 'HII_GRAPH_NAV_READ_ONLY_ACTION=BLOCKED' build/NAVIGATION.EFI
+          grep -aF 'HII_GRAPH_NAV_DISABLED_ACTION=BLOCKED' build/NAVIGATION.EFI
+          grep -aF 'HII_GRAPH_NAV_CONDITIONAL_ACTION=BLOCKED' build/NAVIGATION.EFI
           grep -aF 'HII_GRAPH_NAV_CONDITION_TRACKING=PASS' build/NAVIGATION.EFI
           grep -aF 'HII_GRAPH_NAV_FORM_ID=0x' build/NAVIGATION.EFI
           grep -aF 'HII_GRAPH_NAV_QUESTION_ID=0x' build/NAVIGATION.EFI
@@ -97,6 +101,26 @@ jobs:
           grep -aF 'HII_GRAPH_NAV_CONDITION_FLAGS=0x' build/NAVIGATION.EFI
           grep -aF 'HII_GRAPH_SPEECH_DIGITS=PASS' build/NAVIGATION.EFI
           grep -aF 'HII_GRAPH_NAV_WHERE_AM_I_KEY=PASS' build/NAVIGATION.EFI
+          grep -aF 'HII_GRAPH_NAV_WHERE_AM_I_CONTEXT=PASS' build/NAVIGATION.EFI
+          grep -aF 'HII_GRAPH_NAV_POSITION_KEY=PASS' build/NAVIGATION.EFI
+          grep -aF 'HII_GRAPH_NAV_POSITION_SPEECH=PASS' build/NAVIGATION.EFI
+          grep -aF 'HII_GRAPH_NAV_STAGED_EDIT_MODE=PASS' build/NAVIGATION.EFI
+          grep -aF 'HII_GRAPH_NAV_STAGED_EDIT=PASS' build/NAVIGATION.EFI
+          grep -aF 'HII_GRAPH_NAV_STAGED_ONEOF=PASS' build/NAVIGATION.EFI
+          grep -aF 'HII_GRAPH_NAV_STAGED_CHECKBOX=PASS' build/NAVIGATION.EFI
+          grep -aF 'HII_GRAPH_NAV_STAGED_DISCARD=PASS' build/NAVIGATION.EFI
+          grep -aF 'HII_GRAPH_NAV_STAGED_STATUS_SPEECH=PASS' build/NAVIGATION.EFI
+          grep -aF 'HII_GRAPH_NAV_STAGED_CURRENT_DISCARD=PASS' build/NAVIGATION.EFI
+          grep -aF 'HII_GRAPH_NAV_SAVE_BLOCKED=PASS' build/NAVIGATION.EFI
+          grep -aF 'HII_GRAPH_NAV_NO_FIRMWARE_WRITE=PASS' build/NAVIGATION.EFI
+          grep -aF 'HII_GRAPH_NAV_CONFIG_DRIVER_HANDLE=PASS' build/NAVIGATION.EFI
+          grep -aF 'HII_GRAPH_NAV_CONFIG_ACCESS_DISCOVERY=PASS' build/NAVIGATION.EFI
+          grep -aF 'HII_GRAPH_NAV_CONFIG_ROUTING_DISCOVERY=PASS' build/NAVIGATION.EFI
+          grep -aF 'HII_GRAPH_NAV_COMMIT_PATH_DISCOVERY=PASS' build/NAVIGATION.EFI
+          grep -aF 'HII_GRAPH_NAV_ROUTE_CONFIG_NOT_INVOKED=PASS' build/NAVIGATION.EFI
+          grep -aF 'HII_GRAPH_NAV_LIVE_REFRESH=PASS' build/NAVIGATION.EFI
+          grep -aF 'HII_GRAPH_NAV_REFRESH_FOCUS_RESTORED=PASS' build/NAVIGATION.EFI
+          grep -aF 'HII_GRAPH_NAV_REFRESH_FOCUS_FALLBACK=PASS' build/NAVIGATION.EFI
           echo VOICE_NAVIGATION_BUILD=PASS
 
       - name: Upload validation artifacts

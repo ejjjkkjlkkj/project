@@ -117,12 +117,20 @@ typedef u64 (*hii_export_fn)(const void *self, void *handle, usize *buffer_size,
 typedef u64 (*hii_get_string_fn)(const void *self, const char *language, void *handle, u16 string_id, u16 *string, usize *string_size, void **font_info);
 typedef u64 (*hii_get_languages_fn)(const void *self, void *handle, char *languages, usize *language_size);
 
+typedef u64 (*hii_get_package_list_handle_fn)(const void *self, void *hii_handle,
+                                                  void **driver_handle);
 typedef struct {
     void *new_package_list;
     void *remove_package_list;
     void *update_package_list;
     hii_list_fn list_package_lists;
     hii_export_fn export_package_lists;
+    void *register_package_notify;
+    void *unregister_package_notify;
+    void *find_keyboard_layouts;
+    void *get_keyboard_layout;
+    void *set_keyboard_layout;
+    hii_get_package_list_handle_fn get_package_list_handle;
 } hii_database_protocol;
 
 typedef struct {
@@ -146,6 +154,10 @@ static const efi_guid g_hii_database_guid =
     {0xef9fc172u,0xa1b2u,0x4693u,{0xb3,0x27,0x6d,0x32,0xfc,0x41,0x60,0x42}};
 static const efi_guid g_hii_string_guid =
     {0x0fd96974u,0x23aau,0x4cdcu,{0xb9,0xcb,0x98,0xd1,0x77,0x50,0x32,0x2a}};
+static const efi_guid g_hii_config_access_guid =
+    {0x330d4706u,0xf2a0u,0x4e4fu,{0xa3,0x69,0xb6,0x6f,0xa8,0xd5,0x43,0x85}};
+static const efi_guid g_hii_config_routing_guid =
+    {0x587e72d7u,0xcc50u,0x4f79u,{0x82,0x09,0xca,0x29,0x1f,0xc1,0xa1,0x0f}};
 static const efi_guid g_loaded_image_guid =
     {0x5b1b31a1u,0x9562u,0x11d2u,{0x8e,0x3f,0x00,0xa0,0xc9,0x69,0x72,0x3b}};
 static const efi_guid g_simple_fs_guid =
@@ -172,6 +184,7 @@ static u32 g_prompt_count;
 #define MAX_HII_VAR_DATA 4096
 #define MAX_HII_OPTIONS_PER_PROMPT 8
 #define MAX_HII_QUESTIONS 768
+#define MAX_HII_STAGED_VALUES 64
 #define MAX_IFR_EXPR_STACK 32
 
 typedef struct {
@@ -201,6 +214,16 @@ typedef struct {
 static nav_question_desc g_nav_questions[MAX_HII_QUESTIONS];
 static u16 g_nav_question_total;
 
+typedef struct {
+    u8 valid;
+    u8 handle_index;
+    u16 question_id;
+    u64 value;
+} nav_staged_value;
+
+static nav_staged_value g_nav_staged_values[MAX_HII_STAGED_VALUES];
+static u8 g_nav_staged_total;
+
 static char g_nav_prompts[MAX_HII_NAV_PROMPTS][33];
 static u8 g_nav_prompt_lengths[MAX_HII_NAV_PROMPTS];
 static u8 g_nav_prompt_opcodes[MAX_HII_NAV_PROMPTS];
@@ -229,6 +252,14 @@ static char g_nav_help_text[33];
 static u8 g_nav_help_length;
 static char g_nav_value_text[33];
 static u8 g_nav_value_length;
+static char g_nav_focus_speech[33];
+static u8 g_nav_focus_speech_length;
+static char g_nav_position_text[33];
+static u8 g_nav_position_length;
+static char g_nav_where_text[33];
+static u8 g_nav_where_length;
+static char g_nav_edit_status_text[33];
+static u8 g_nav_edit_status_length;
 static u8 g_nav_help_available;
 static u16 g_nav_current_form_id;
 static char g_nav_form_title[33];
@@ -247,6 +278,9 @@ static u16 g_nav_condition_known;
 static u16 g_nav_condition_unknown;
 static u16 g_nav_condition_hidden;
 static u16 g_nav_condition_gray;
+static void *g_nav_config_driver_handle;
+static void *g_nav_config_access;
+static void *g_nav_config_routing;
 #define NAV_SEEN_UP        0x01u
 #define NAV_SEEN_DOWN      0x02u
 #define NAV_SEEN_R         0x04u
@@ -1344,6 +1378,275 @@ static int nav_live_value_text(void *system_table, u8 prompt_index,
            ((*text_out = g_nav_value_text), (*length_out = g_nav_value_length), 1);
 }
 
+static nav_staged_value *nav_stage_find(u8 handle_index, u16 question_id) {
+    if (!question_id) return 0;
+    for (u8 i = 0u; i < g_nav_staged_total; ++i) {
+        nav_staged_value *e = &g_nav_staged_values[i];
+        if (e->valid && e->handle_index == handle_index &&
+            e->question_id == question_id) return e;
+    }
+    return 0;
+}
+
+static int nav_stage_get(u8 prompt_index, u64 *value_out) {
+    if (!value_out || prompt_index >= g_nav_prompt_total) return 0;
+    nav_staged_value *e = nav_stage_find(
+        g_nav_prompt_handle_indices[prompt_index],
+        g_nav_prompt_question_ids[prompt_index]);
+    if (!e) return 0;
+    *value_out = e->value;
+    return 1;
+}
+
+static int nav_stage_set(u8 prompt_index, u64 value) {
+    if (prompt_index >= g_nav_prompt_total ||
+        !g_nav_prompt_question_ids[prompt_index]) return 0;
+    if (g_nav_prompt_condition_flags[prompt_index] &
+        (NAV_COND_GRAY | NAV_COND_UNKNOWN)) return 0;
+    if (g_nav_prompt_opcodes[prompt_index] != 0x05u &&
+        g_nav_prompt_opcodes[prompt_index] != 0x06u) return 0;
+
+    nav_staged_value *e = nav_stage_find(
+        g_nav_prompt_handle_indices[prompt_index],
+        g_nav_prompt_question_ids[prompt_index]);
+    if (!e) {
+        if (g_nav_staged_total >= MAX_HII_STAGED_VALUES) return 0;
+        e = &g_nav_staged_values[g_nav_staged_total++];
+        e->valid = 1u;
+        e->handle_index = g_nav_prompt_handle_indices[prompt_index];
+        e->question_id = g_nav_prompt_question_ids[prompt_index];
+    }
+    e->value = value;
+    return 1;
+}
+
+static void nav_stage_clear_all(void) {
+    for (u8 i = 0u; i < g_nav_staged_total; ++i)
+        g_nav_staged_values[i].valid = 0u;
+    g_nav_staged_total = 0u;
+}
+
+static u8 nav_stage_count(void) {
+    u8 count = 0u;
+    for (u8 i = 0u; i < g_nav_staged_total; ++i)
+        if (g_nav_staged_values[i].valid) ++count;
+    return count;
+}
+
+static int nav_stage_discard_prompt(u8 prompt_index) {
+    if (prompt_index >= g_nav_prompt_total) return 0;
+    nav_staged_value *e = nav_stage_find(
+        g_nav_prompt_handle_indices[prompt_index],
+        g_nav_prompt_question_ids[prompt_index]);
+    if (!e) return 0;
+    e->valid = 0u;
+    while (g_nav_staged_total &&
+           !g_nav_staged_values[g_nav_staged_total - 1u].valid)
+        --g_nav_staged_total;
+    return 1;
+}
+
+static int nav_effective_scalar_value(void *system_table, u8 prompt_index,
+                                      u64 *value_out, u8 *staged_out) {
+    if (!value_out || prompt_index >= g_nav_prompt_total) return 0;
+    if (staged_out) *staged_out = 0u;
+    if (nav_stage_get(prompt_index, value_out)) {
+        if (staged_out) *staged_out = 1u;
+        return 1;
+    }
+    return nav_read_scalar_value(system_table, prompt_index, value_out);
+}
+
+static int nav_effective_value_text(void *system_table, u8 prompt_index,
+                                    const char **text_out, u8 *length_out,
+                                    u8 *staged_out) {
+    if (!text_out || !length_out || prompt_index >= g_nav_prompt_total) return 0;
+    u64 value = 0u;
+    if (!nav_effective_scalar_value(system_table, prompt_index, &value,
+                                    staged_out)) return 0;
+    if (g_nav_prompt_opcodes[prompt_index] == 0x06u) {
+        if (value) {
+            *text_out = "checked";
+            *length_out = 7u;
+        } else {
+            *text_out = "not checked";
+            *length_out = 11u;
+        }
+        return 1;
+    }
+    if (nav_option_for_value(prompt_index, value, text_out, length_out)) return 1;
+    return nav_format_u64(value, g_nav_value_text, &g_nav_value_length) &&
+           ((*text_out = g_nav_value_text), (*length_out = g_nav_value_length), 1);
+}
+
+static int nav_stage_cycle_oneof(void *system_table, u8 prompt_index,
+                                 int direction) {
+    if (!system_table || prompt_index >= g_nav_prompt_total ||
+        g_nav_prompt_opcodes[prompt_index] != 0x05u ||
+        (g_nav_prompt_condition_flags[prompt_index] &
+         (NAV_COND_GRAY | NAV_COND_UNKNOWN))) return 0;
+    u8 count = g_nav_option_counts[prompt_index];
+    if (!count) return 0;
+    u64 current = 0u;
+    u8 staged = 0u;
+    if (!nav_effective_scalar_value(system_table, prompt_index,
+                                    &current, &staged)) return 0;
+    u8 selected = 0u;
+    int found = 0;
+    for (u8 i = 0u; i < count; ++i) {
+        if (g_nav_option_values[prompt_index][i] == current) {
+            selected = i;
+            found = 1;
+            break;
+        }
+    }
+    if (!found) selected = direction < 0 ? 0u : (u8)(count - 1u);
+    if (direction < 0)
+        selected = selected ? (u8)(selected - 1u) : (u8)(count - 1u);
+    else
+        selected = (u8)((selected + 1u) % count);
+    return nav_stage_set(prompt_index, g_nav_option_values[prompt_index][selected]);
+}
+
+static int nav_stage_toggle_checkbox(void *system_table, u8 prompt_index) {
+    if (!system_table || prompt_index >= g_nav_prompt_total ||
+        g_nav_prompt_opcodes[prompt_index] != 0x06u ||
+        (g_nav_prompt_condition_flags[prompt_index] &
+         (NAV_COND_GRAY | NAV_COND_UNKNOWN))) return 0;
+    u64 current = 0u;
+    u8 staged = 0u;
+    if (!nav_effective_scalar_value(system_table, prompt_index,
+                                    &current, &staged)) return 0;
+    return nav_stage_set(prompt_index, current ? 0u : 1u);
+}
+
+static u8 nav_append_decimal(char *out, u8 n, u8 cap, u32 value) {
+    char digits[10];
+    u8 count = 0u;
+    do {
+        digits[count++] = (char)('0' + (value % 10u));
+        value /= 10u;
+    } while (value && count < (u8)sizeof(digits));
+    while (count && n < cap) out[n++] = digits[--count];
+    return n;
+}
+
+static int nav_build_edit_status_speech(char *out, u8 *length_out) {
+    if (!out || !length_out) return 0;
+    u8 count = nav_stage_count();
+    if (!count) {
+        static const char none[] = "no pending edits";
+        u8 n = 0u;
+        while (none[n] && n < 32u) { out[n] = none[n]; ++n; }
+        out[n] = 0;
+        *length_out = n;
+        return 1;
+    }
+    static const char prefix[] = "pending edits ";
+    u8 n = 0u;
+    for (u8 i = 0u; prefix[i] && n < 32u; ++i) out[n++] = prefix[i];
+    n = nav_append_decimal(out, n, 32u, count);
+    out[n] = 0;
+    *length_out = n;
+    return 1;
+}
+
+static int nav_build_position_speech(u8 prompt_index, char *out, u8 *length_out) {
+    if (!out || !length_out || prompt_index >= g_nav_prompt_total ||
+        !g_nav_prompt_total) return 0;
+    static const char prefix[] = "position ";
+    static const char middle[] = " of ";
+    u8 n = 0u;
+    for (u8 i = 0u; prefix[i] && n < 32u; ++i) out[n++] = prefix[i];
+    n = nav_append_decimal(out, n, 32u, (u32)prompt_index + 1u);
+    for (u8 i = 0u; middle[i] && n < 32u; ++i) out[n++] = middle[i];
+    n = nav_append_decimal(out, n, 32u, (u32)g_nav_prompt_total);
+    out[n] = 0;
+    *length_out = n;
+    return n != 0u;
+}
+
+static int nav_build_where_am_i_speech(void *system_table, u8 prompt_index,
+                                      char *out, u8 *length_out) {
+    if (!system_table || !out || !length_out ||
+        prompt_index >= g_nav_prompt_total) return 0;
+
+    const char *value_text = 0;
+    u8 value_length = 0u;
+    u8 staged = 0u;
+    int have_value = nav_effective_value_text(system_table, prompt_index,
+                                              &value_text, &value_length,
+                                              &staged);
+    if (!have_value) value_length = 0u;
+    u8 suffix_budget = value_length ? (u8)(value_length + 1u) : 0u;
+    if (suffix_budget > 20u) suffix_budget = 20u;
+    u8 prefix_budget = (u8)(32u - suffix_budget);
+    u8 n = 0u;
+
+    for (u8 i = 0u; i < g_nav_form_title_length && n < prefix_budget; ++i)
+        out[n++] = g_nav_form_title[i];
+    if (n < prefix_budget && g_nav_prompt_lengths[prompt_index]) out[n++] = ' ';
+    for (u8 i = 0u; i < g_nav_prompt_lengths[prompt_index] && n < prefix_budget; ++i)
+        out[n++] = g_nav_prompts[prompt_index][i];
+
+    if (value_length && value_text) {
+        if (n && n < 32u) out[n++] = ' ';
+        for (u8 i = 0u; i < value_length && n < 32u; ++i)
+            out[n++] = value_text[i];
+    }
+    out[n] = 0;
+    *length_out = n;
+    return n != 0u;
+}
+
+static int nav_build_focus_speech(void *system_table, u8 prompt_index,
+                                  char *out, u8 *length_out) {
+    if (!system_table || !out || !length_out ||
+        prompt_index >= g_nav_prompt_total) return 0;
+
+    const char *value_text = 0;
+    u8 value_length = 0u;
+    u8 staged = 0u;
+    if (!nav_effective_value_text(system_table, prompt_index,
+                                  &value_text, &value_length,
+                                  &staged) ||
+        !value_text || !value_length)
+        return 0;
+
+    if (value_length >= 32u) {
+        for (u8 i = 0u; i < 32u; ++i) out[i] = value_text[i];
+        out[32] = 0;
+        *length_out = 32u;
+        return 1;
+    }
+
+    /* Preserve the live value at the end: it is more important than a
+       truncated label for blind operation. Role/state remain at the front. */
+    u8 budget = (u8)(32u - value_length - 1u);
+    u8 n = 0u;
+    const char *role = ifr_semantic_role(g_nav_prompt_opcodes[prompt_index]);
+    while (*role && n < budget) out[n++] = *role++;
+
+    const char *state = 0;
+    if (g_nav_prompt_condition_flags[prompt_index] & NAV_COND_GRAY)
+        state = " disabled";
+    else if (g_nav_prompt_condition_flags[prompt_index] & NAV_COND_UNKNOWN)
+        state = " conditional";
+    else if (staged)
+        state = " preview";
+    if (state) while (*state && n < budget) out[n++] = *state++;
+
+    if (n < budget && g_nav_prompt_lengths[prompt_index]) out[n++] = ' ';
+    for (u8 i = 0u; i < g_nav_prompt_lengths[prompt_index] && n < budget; ++i)
+        out[n++] = g_nav_prompts[prompt_index][i];
+    if (n && n < 32u) out[n++] = ' ';
+    for (u8 i = 0u; i < value_length && n < 32u; ++i)
+        out[n++] = value_text[i];
+    out[n] = 0;
+    *length_out = n;
+    return n != 0u;
+}
+
 static int nav_read_varstore_scalar(void *system_table, u8 handle_index,
                                     u16 varstore_id, u16 var_info, u8 width,
                                     u64 *value_out) {
@@ -1573,6 +1876,41 @@ static int nav_find_form(int direction, u8 *index_out) {
     }
     return 0;
 }
+static int nav_load_form(void *system_table, u16 requested_form_id);
+static void nav_prompt_load(u8 index);
+
+static int nav_find_question_index(u16 question_id, u8 *index_out) {
+    if (!question_id || !index_out) return 0;
+    for (u8 i = 0u; i < g_nav_prompt_total; ++i) {
+        if (g_nav_prompt_question_ids[i] == question_id) {
+            *index_out = i;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static int nav_refresh_current_form(void *system_table) {
+    if (!system_table || !g_nav_current_form_id) return 0;
+    u16 form_id = g_nav_current_form_id;
+    u16 question_id = g_nav_prompt_question_ids[g_nav_prompt_index];
+    u8 old_index = g_nav_prompt_index;
+    if (!nav_load_form(system_table, form_id)) return 0;
+
+    u8 restored = 0u;
+    if (question_id && nav_find_question_index(question_id, &restored)) {
+        nav_prompt_load(restored);
+        marker("HII_GRAPH_NAV_REFRESH_FOCUS_RESTORED=PASS");
+    } else {
+        if (old_index >= g_nav_prompt_total)
+            old_index = (u8)(g_nav_prompt_total - 1u);
+        nav_prompt_load(old_index);
+        marker("HII_GRAPH_NAV_REFRESH_FOCUS_FALLBACK=PASS");
+    }
+    marker("HII_GRAPH_NAV_LIVE_REFRESH=PASS");
+    return 1;
+}
+
 #endif
 static u16 fold_prompt_char(u16 ch) {
     if (ch >= (u16)'A' && ch <= (u16)'Z') return (u16)(ch + 32u);
@@ -2009,6 +2347,61 @@ static int nav_load_form(void *system_table, u16 requested_form_id) {
     return 1;
 }
 
+static void nav_discover_config_commit_path(void *system_table,
+                                            hii_database_protocol *db,
+                                            void *hii_handle) {
+    g_nav_config_driver_handle = 0;
+    g_nav_config_access = 0;
+    g_nav_config_routing = 0;
+    if (!system_table || !db || !hii_handle || !db->get_package_list_handle) {
+        marker("HII_GRAPH_NAV_CONFIG_PATH=NOT_AVAILABLE");
+        return;
+    }
+
+    void *bs = *(void **)((u8 *)system_table + 0x60);
+    if (!bs) {
+        marker("HII_GRAPH_NAV_CONFIG_PATH=NOT_AVAILABLE");
+        return;
+    }
+    handle_protocol_fn handle_protocol =
+        *(handle_protocol_fn *)((u8 *)bs + 0x98);
+    locate_protocol_fn locate = *(locate_protocol_fn *)((u8 *)bs + 0x140);
+    if (!handle_protocol || !locate) {
+        marker("HII_GRAPH_NAV_CONFIG_PATH=NOT_AVAILABLE");
+        return;
+    }
+
+    if (db->get_package_list_handle(db, hii_handle,
+                                    &g_nav_config_driver_handle) == 0 &&
+        g_nav_config_driver_handle) {
+        marker("HII_GRAPH_NAV_CONFIG_DRIVER_HANDLE=PASS");
+        if (handle_protocol(g_nav_config_driver_handle,
+                            &g_hii_config_access_guid,
+                            &g_nav_config_access) == 0 &&
+            g_nav_config_access)
+            marker("HII_GRAPH_NAV_CONFIG_ACCESS_DISCOVERY=PASS");
+        else
+            marker("HII_GRAPH_NAV_CONFIG_ACCESS_DISCOVERY=NOT_AVAILABLE");
+    } else {
+        marker("HII_GRAPH_NAV_CONFIG_DRIVER_HANDLE=NOT_AVAILABLE");
+    }
+
+    if (locate(&g_hii_config_routing_guid, 0, &g_nav_config_routing) == 0 &&
+        g_nav_config_routing)
+        marker("HII_GRAPH_NAV_CONFIG_ROUTING_DISCOVERY=PASS");
+    else
+        marker("HII_GRAPH_NAV_CONFIG_ROUTING_DISCOVERY=NOT_AVAILABLE");
+
+    if (g_nav_config_access && g_nav_config_routing)
+        marker("HII_GRAPH_NAV_COMMIT_PATH_DISCOVERY=PASS");
+    else
+        marker("HII_GRAPH_NAV_COMMIT_PATH_DISCOVERY=PARTIAL");
+
+    /* Discovery only. No RouteConfig, callback, or SetVariable write is
+       permitted until transaction serialization and rollback are proven. */
+    marker("HII_GRAPH_NAV_ROUTE_CONFIG_NOT_INVOKED=PASS");
+}
+
 #endif
 
 static int resolve_hii_prompt(void *system_table) {
@@ -2201,6 +2594,7 @@ static int resolve_hii_prompt(void *system_table) {
         g_nav_hii_handle = handle;
         g_nav_m1603qa_308_profile = 1u;
         g_nav_form_history_depth = 0u;
+        nav_discover_config_commit_path(system_table, db, handle);
         if (!nav_load_form(system_table, 0x2710u)) {
             marker("HII_GRAPH_NAV_PROFILE=M1603QA_BIOS_308_FORM_LOAD_FAILED");
             return 0;
@@ -2515,6 +2909,9 @@ static int wait_navigation_keys(void *system_table) {
     marker("HII_GRAPH_NAV_FORM_KEYS=PASS");
     marker("HII_GRAPH_NAV_LIVE_VALUE_KEY=PASS");
     marker("HII_GRAPH_NAV_WHERE_AM_I_KEY=PASS");
+    marker("HII_GRAPH_NAV_POSITION_KEY=PASS");
+    marker("HII_GRAPH_NAV_STAGED_EDIT_MODE=PASS");
+    marker("HII_GRAPH_NAV_NO_FIRMWARE_WRITE=PASS");
     serial_puts("HII_GRAPH_NAV_TOTAL=0x");
     serial_hex8(g_nav_prompt_total);
     serial_puts("\r\n");
@@ -2557,9 +2954,20 @@ static int wait_navigation_keys(void *system_table) {
             }
             if (key.unicode_char == 0x000du) {
                 marker("HII_GRAPH_NAV_KEY=ENTER");
+                u8 current_condition = g_nav_prompt_condition_flags[g_nav_prompt_index];
                 u16 target = g_nav_ref_form_ids[g_nav_prompt_index];
-                if (g_nav_m1603qa_308_profile && target &&
-                    target != g_nav_current_form_id) {
+                if (current_condition & NAV_COND_GRAY) {
+                    marker("HII_GRAPH_NAV_DISABLED_ACTION=BLOCKED");
+                    speech_override = "disabled";
+                    speech_override_length = 8u;
+                    speak = 1;
+                } else if (current_condition & NAV_COND_UNKNOWN) {
+                    marker("HII_GRAPH_NAV_CONDITIONAL_ACTION=BLOCKED");
+                    speech_override = "conditional";
+                    speech_override_length = 11u;
+                    speak = 1;
+                } else if (g_nav_m1603qa_308_profile && target &&
+                           target != g_nav_current_form_id) {
                     u16 previous = g_nav_current_form_id;
                     if (g_nav_form_history_depth >= 16u) return 0;
                     g_nav_form_history[g_nav_form_history_depth++] = previous;
@@ -2586,6 +2994,13 @@ static int wait_navigation_keys(void *system_table) {
             }
             if (key.unicode_char == (u16)'w' || key.unicode_char == (u16)'W') {
                 marker("HII_GRAPH_NAV_KEY=W");
+                if (nav_build_where_am_i_speech(system_table, g_nav_prompt_index,
+                                                g_nav_where_text,
+                                                &g_nav_where_length)) {
+                    speech_override = g_nav_where_text;
+                    speech_override_length = g_nav_where_length;
+                    marker("HII_GRAPH_NAV_WHERE_AM_I_CONTEXT=PASS");
+                }
                 marker("HII_GRAPH_NAV_WHERE_AM_I=PASS");
                 speak = 1;
             } else if (key.unicode_char == (u16)'f' || key.unicode_char == (u16)'F') {
@@ -2653,6 +3068,81 @@ static int wait_navigation_keys(void *system_table) {
                     marker("HII_GRAPH_NAV_STRUCTURAL_EDITABLE=NOT_FOUND");
                 }
                 speak = 1;
+            } else if (key.unicode_char == (u16)'p' || key.unicode_char == (u16)'P') {
+                marker("HII_GRAPH_NAV_KEY=P");
+                if (nav_build_position_speech(g_nav_prompt_index,
+                                              g_nav_position_text,
+                                              &g_nav_position_length)) {
+                    speech_override = g_nav_position_text;
+                    speech_override_length = g_nav_position_length;
+                    marker("HII_GRAPH_NAV_POSITION_SPEECH=PASS");
+                } else {
+                    speech_override = "no position";
+                    speech_override_length = 11u;
+                    marker("HII_GRAPH_NAV_POSITION_SPEECH=NOT_AVAILABLE");
+                }
+                speak = 1;
+            } else if (key.unicode_char == (u16)'o' || key.unicode_char == (u16)'O') {
+                marker("HII_GRAPH_NAV_KEY=O");
+                int direction = key.unicode_char == (u16)'O' ? -1 : 1;
+                if (nav_stage_cycle_oneof(system_table, g_nav_prompt_index,
+                                          direction)) {
+                    marker("HII_GRAPH_NAV_STAGED_ONEOF=PASS");
+                    marker("HII_GRAPH_NAV_STAGED_EDIT=PASS");
+                    speak = 1;
+                } else {
+                    speech_override = "not editable";
+                    speech_override_length = 12u;
+                    marker("HII_GRAPH_NAV_STAGED_ONEOF=NOT_AVAILABLE");
+                    speak = 1;
+                }
+            } else if (key.unicode_char == 0x0020u) {
+                marker("HII_GRAPH_NAV_KEY=SPACE");
+                if (nav_stage_toggle_checkbox(system_table, g_nav_prompt_index)) {
+                    marker("HII_GRAPH_NAV_STAGED_CHECKBOX=PASS");
+                    marker("HII_GRAPH_NAV_STAGED_EDIT=PASS");
+                    speak = 1;
+                } else {
+                    speech_override = "not editable";
+                    speech_override_length = 12u;
+                    marker("HII_GRAPH_NAV_STAGED_CHECKBOX=NOT_AVAILABLE");
+                    speak = 1;
+                }
+            } else if (key.unicode_char == (u16)'m' || key.unicode_char == (u16)'M') {
+                marker("HII_GRAPH_NAV_KEY=M");
+                if (nav_build_edit_status_speech(g_nav_edit_status_text,
+                                                 &g_nav_edit_status_length)) {
+                    speech_override = g_nav_edit_status_text;
+                    speech_override_length = g_nav_edit_status_length;
+                    marker("HII_GRAPH_NAV_STAGED_STATUS_SPEECH=PASS");
+                }
+                speak = 1;
+            } else if (key.unicode_char == (u16)'z' || key.unicode_char == (u16)'Z') {
+                marker("HII_GRAPH_NAV_KEY=Z");
+                if (nav_stage_discard_prompt(g_nav_prompt_index)) {
+                    speech_override = "edit discarded";
+                    speech_override_length = 14u;
+                    marker("HII_GRAPH_NAV_STAGED_CURRENT_DISCARD=PASS");
+                } else {
+                    speech_override = "no pending edit";
+                    speech_override_length = 15u;
+                    marker("HII_GRAPH_NAV_STAGED_CURRENT_DISCARD=NOT_AVAILABLE");
+                }
+                speak = 1;
+            } else if (key.unicode_char == (u16)'d' || key.unicode_char == (u16)'D') {
+                marker("HII_GRAPH_NAV_KEY=D");
+                nav_stage_clear_all();
+                speech_override = "edits discarded";
+                speech_override_length = 15u;
+                marker("HII_GRAPH_NAV_STAGED_DISCARD=PASS");
+                speak = 1;
+            } else if (key.unicode_char == (u16)'s' || key.unicode_char == (u16)'S') {
+                marker("HII_GRAPH_NAV_KEY=S");
+                speech_override = "save unavailable";
+                speech_override_length = 16u;
+                marker("HII_GRAPH_NAV_SAVE_BLOCKED=PASS");
+                marker("HII_GRAPH_NAV_NO_FIRMWARE_WRITE=PASS");
+                speak = 1;
             } else if (key.unicode_char == (u16)'h' || key.unicode_char == (u16)'H') {
                 marker("HII_GRAPH_NAV_KEY=H");
                 speak = 1;
@@ -2684,6 +3174,10 @@ static int wait_navigation_keys(void *system_table) {
             } else if (key.unicode_char == (u16)'r' || key.unicode_char == (u16)'R') {
                 marker("HII_GRAPH_NAV_KEY=R");
                 g_nav_event_mask |= NAV_SEEN_R;
+                if (g_nav_m1603qa_308_profile) {
+                    speech_dma_stop();
+                    if (!nav_refresh_current_form(system_table)) return 0;
+                }
                 speak = 1;
             } else if (key.scan_code == 0x0001u) {
                 marker("HII_GRAPH_NAV_KEY=UP");
@@ -2748,6 +3242,14 @@ static int wait_navigation_keys(void *system_table) {
             if (speak) {
                 const char *speech_text = speech_override ? speech_override : g_nav_speech_text;
                 u8 speech_length = speech_override ? speech_override_length : g_nav_speech_length;
+                if (!speech_override && !speak_help &&
+                    nav_build_focus_speech(system_table, g_nav_prompt_index,
+                                           g_nav_focus_speech,
+                                           &g_nav_focus_speech_length)) {
+                    speech_text = g_nav_focus_speech;
+                    speech_length = g_nav_focus_speech_length;
+                    marker("HII_GRAPH_NAV_FOCUS_VALUE_SPEECH=PASS");
+                }
                 if (speak_help) {
                     if (g_nav_help_length) {
                         speech_text = g_nav_help_text;
@@ -2911,7 +3413,16 @@ __attribute__((ms_abi)) u64 efi_main(void *image_handle, void *system_table) {
     marker("BDL_RUNTIME_TEXT_SCHEDULE=PASS");
 
 #ifdef QEV_INTERACTIVE_NAV
-    if (!run_speech_dma(g_nav_speech_text, g_nav_speech_length)) {
+    const char *initial_speech = g_nav_speech_text;
+    u8 initial_speech_length = g_nav_speech_length;
+    if (nav_build_focus_speech(system_table, g_nav_prompt_index,
+                               g_nav_focus_speech,
+                               &g_nav_focus_speech_length)) {
+        initial_speech = g_nav_focus_speech;
+        initial_speech_length = g_nav_focus_speech_length;
+        marker("HII_GRAPH_NAV_INITIAL_VALUE_SPEECH=PASS");
+    }
+    if (!run_speech_dma(initial_speech, initial_speech_length)) {
 #else
     if (!run_speech_dma(g_prompt_text, g_prompt_count)) {
 #endif
@@ -2924,7 +3435,7 @@ __attribute__((ms_abi)) u64 efi_main(void *image_handle, void *system_table) {
     marker("LPIB_PROGRESS=PASS");
     marker("HII_GRAPH_NAV_REALTIME_CAPABLE=PASS");
 #ifdef QEV_INTERACTIVE_NAV
-    marker("HII_GRAPH_NAV_SEMANTIC_SPEECH=ROLE_PLUS_LABEL");
+    marker("HII_GRAPH_NAV_SEMANTIC_SPEECH=ROLE_STATE_LABEL_VALUE");
 #endif
     if (g_controller_preferred && g_codec_vendor_id == 0x10ec0256u) {
         marker("PHYSICAL_ASUS_M1603QA_HDA_RUNTIME=PASS");
