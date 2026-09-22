@@ -44,6 +44,14 @@ jobs:
           ./sr-hii-selftest | tee hii-proof.txt
           grep -F 'UEFI_HII_IFR_MODEL=PASS' hii-proof.txt
 
+      - name: Host HII semantic value self-test
+        working-directory: screenreader/uefi
+        run: |
+          set -euo pipefail
+          cc -std=c11 -O2 -Wall -Wextra -Werror             sr_hii_ifr.c sr_hii_value_selftest.c             -o sr-hii-value-selftest
+          ./sr-hii-value-selftest | tee hii-value-proof.txt
+          grep -F 'UEFI_HII_SEMANTIC_VALUES=PASS' hii-value-proof.txt
+
       - name: Host item chooser self-test
         working-directory: screenreader/uefi
         run: |
