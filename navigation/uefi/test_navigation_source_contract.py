@@ -35,10 +35,29 @@ required = (
     'speech_phrase_start_next',
     'g_speech_phrase',
     'g_speech_chunk',
-    'HII_GRAPH_NAV_DIRECTIONAL_ALIASES=PASS',
+    'HII_GRAPH_NAV_DIRECTIONAL_MODEL=BLIND_SIMPLE',
     'HII_GRAPH_NAV_TAB_FORWARD=PASS',
     'HII_GRAPH_NAV_CONTEXT_HELP=PASS',
     'HII_GRAPH_NAV_CONTEXT_HELP_SPEECH=PASS',
+    'HII_GRAPH_NAV_DISCOVERY_PROMPT=PASS',
+    'HII_GRAPH_NAV_HELP_DISCOVERABLE=PASS',
+    'HII_GRAPH_NAV_BUILTIN_HELP=PASS',
+    'HII_GRAPH_NAV_SIMPLE_EXIT=PASS',
+    'HII_GRAPH_NAV_EXIT_DISCARD_SPEECH=PASS',
+    'preview edits discarded',
+    'HII_GRAPH_NAV_REQUIRED_EVENTS=PENDING_NONBLOCKING',
+    'HII_GRAPH_NAV_ENTER_CONTEXT_ACTION=PASS',
+    'HII_GRAPH_NAV_ENTER_TOGGLE=PASS',
+    'HII_GRAPH_NAV_ENTER_CHOICE=PASS',
+    'ready press f1 for help',
+    'up down move left right change enter action escape back f1 help',
+    'HII_GRAPH_NAV_LEFT_RIGHT_EDIT=PASS',
+    'HII_GRAPH_NAV_ARROW_CHOICE=PASS',
+    'HII_GRAPH_NAV_ARROW_NUMERIC=PASS',
+    'HII_GRAPH_NAV_ARROW_EDIT_BLOCKED=PASS',
+    'no change',
+    'HII_GRAPH_NAV_LEFT_FALLBACK_MOVE=PASS',
+    'HII_GRAPH_NAV_RIGHT_FALLBACK_MOVE=PASS',
     'HII_GRAPH_NAV_SPEECH_INTERRUPT=PASS',
     'HII_GRAPH_NAV_STRUCTURAL_KEYS=PASS',
     'HII_GRAPH_NAV_FORM_KEYS=PASS',
@@ -71,6 +90,8 @@ required = (
     'HII_GRAPH_NAV_SUPPRESS_RUNTIME=PASS',
     'HII_GRAPH_NAV_GRAY_RUNTIME=PASS',
     'HII_GRAPH_NAV_DISABLE_RUNTIME=PASS',
+    'HII_GRAPH_NAV_DISABLED_PREVIEW=BLOCKED',
+    '(NAV_COND_GRAY | NAV_COND_DISABLE | NAV_COND_UNKNOWN)',
     'HII_GRAPH_NAV_CONDITION_UNKNOWN_SAFE=PASS',
     'HII_GRAPH_NAV_QUESTION_CATALOG=PASS',
     'nav_eval_condition_expression',
@@ -312,6 +333,11 @@ wait = text[wait_start:wait_end]
 assert "speech_phrase_begin(speech_text, speech_length)" in wait
 assert "speech_phrase_poll(1000u, &progressed)" in wait
 assert "speech_phrase_cancel()" in wait
+assert "HII_GRAPH_NAV_EXIT=BLOCKED_INCOMPLETE" not in wait
+assert "HII_GRAPH_NAV_DIRECTIONAL_ALIASES=PASS" not in wait
+assert "HII_GRAPH_NAV_SIMPLE_EXIT=PASS" in wait
+assert "HII_GRAPH_NAV_ENTER_CONTEXT_ACTION=PASS" in wait
+assert "NAV_COND_DISABLE" in wait
 
 run_start = text.index("static int run_speech_dma")
 run_end = text.index("static u16 rd16", run_start)

@@ -1627,7 +1627,10 @@ static int nav_stage_set(u8 prompt_index, u64 value) {
     if (prompt_index >= g_nav_prompt_total ||
         !g_nav_prompt_question_ids[prompt_index]) return 0;
     if (g_nav_prompt_condition_flags[prompt_index] &
-        (NAV_COND_GRAY | NAV_COND_UNKNOWN)) return 0;
+        (NAV_COND_GRAY | NAV_COND_DISABLE | NAV_COND_UNKNOWN)) {
+        marker("HII_GRAPH_NAV_DISABLED_PREVIEW=BLOCKED");
+        return 0;
+    }
     if (g_nav_prompt_question_flags[prompt_index] & NAV_Q_READ_ONLY) {
         marker("HII_GRAPH_NAV_READ_ONLY_PREVIEW=BLOCKED");
         return 0;
@@ -1815,7 +1818,7 @@ static int nav_stage_cycle_oneof(void *system_table, u8 prompt_index,
     if (!system_table || prompt_index >= g_nav_prompt_total ||
         g_nav_prompt_opcodes[prompt_index] != 0x05u ||
         (g_nav_prompt_condition_flags[prompt_index] &
-         (NAV_COND_GRAY | NAV_COND_UNKNOWN))) return 0;
+         (NAV_COND_GRAY | NAV_COND_DISABLE | NAV_COND_UNKNOWN))) return 0;
     u8 count = g_nav_option_counts[prompt_index];
     if (!count) return 0;
     u64 current = 0u;
@@ -1843,7 +1846,7 @@ static int nav_stage_toggle_checkbox(void *system_table, u8 prompt_index) {
     if (!system_table || prompt_index >= g_nav_prompt_total ||
         g_nav_prompt_opcodes[prompt_index] != 0x06u ||
         (g_nav_prompt_condition_flags[prompt_index] &
-         (NAV_COND_GRAY | NAV_COND_UNKNOWN))) return 0;
+         (NAV_COND_GRAY | NAV_COND_DISABLE | NAV_COND_UNKNOWN))) return 0;
     u64 current = 0u;
     u8 staged = 0u;
     if (!nav_effective_scalar_value(system_table, prompt_index,
@@ -1857,7 +1860,7 @@ static int nav_stage_adjust_numeric(void *system_table, u8 prompt_index,
         g_nav_prompt_opcodes[prompt_index] != 0x07u ||
         !g_nav_prompt_meta_valid[prompt_index] ||
         (g_nav_prompt_condition_flags[prompt_index] &
-         (NAV_COND_GRAY | NAV_COND_UNKNOWN))) return 0;
+         (NAV_COND_GRAY | NAV_COND_DISABLE | NAV_COND_UNKNOWN))) return 0;
     u64 step = g_nav_prompt_step_value[prompt_index];
     u64 minv = g_nav_prompt_min_value[prompt_index];
     u64 maxv = g_nav_prompt_max_value[prompt_index];
@@ -3357,7 +3360,7 @@ static int wait_navigation_keys(void *system_table) {
     marker("HII_GRAPH_NAV_REALTIME_MODE=INTERRUPTIBLE_DMA");
     marker("HII_GRAPH_SPEECH_QUEUE=INTERRUPTIBLE_64");
     marker("HII_GRAPH_SPEECH_WORD_BOUNDARY_CHUNKING=PASS");
-    marker("HII_GRAPH_NAV_DIRECTIONAL_ALIASES=PASS");
+    marker("HII_GRAPH_NAV_DIRECTIONAL_MODEL=BLIND_SIMPLE");
     marker("HII_GRAPH_NAV_TAB_FORWARD=PASS");
     marker("HII_GRAPH_NAV_STRUCTURAL_KEYS=PASS");
     marker("HII_GRAPH_NAV_FORM_KEYS=PASS");
@@ -3401,13 +3404,20 @@ static int wait_navigation_keys(void *system_table) {
                     }
                     speak = 1;
                 } else {
-                    if ((g_nav_event_mask & NAV_REQUIRED_MASK) != NAV_REQUIRED_MASK ||
-                        g_nav_speech_events < 7u) {
-                        marker("HII_GRAPH_NAV_REQUIRED_EVENTS=PENDING");
-                        marker("HII_GRAPH_NAV_EXIT=BLOCKED_INCOMPLETE");
-                        continue;
+                    if ((g_nav_event_mask & NAV_REQUIRED_MASK) == NAV_REQUIRED_MASK &&
+                        g_nav_speech_events >= 7u)
+                        marker("HII_GRAPH_NAV_REQUIRED_EVENTS=PASS");
+                    else
+                        marker("HII_GRAPH_NAV_REQUIRED_EVENTS=PENDING_NONBLOCKING");
+                    if (nav_stage_count()) {
+                        static const char discard_speech[] = "preview edits discarded";
+                        nav_stage_clear_all();
+                        if (run_speech_dma(discard_speech, 23u))
+                            marker("HII_GRAPH_NAV_EXIT_DISCARD_SPEECH=PASS");
+                        else
+                            marker("HII_GRAPH_NAV_EXIT_DISCARD_SPEECH=FAILED");
                     }
-                    marker("HII_GRAPH_NAV_REQUIRED_EVENTS=PASS");
+                    marker("HII_GRAPH_NAV_SIMPLE_EXIT=PASS");
                     marker("HII_GRAPH_NAV_EXIT=PASS");
                     return 1;
                 }
@@ -3416,7 +3426,7 @@ static int wait_navigation_keys(void *system_table) {
                 marker("HII_GRAPH_NAV_KEY=ENTER");
                 u8 current_condition = g_nav_prompt_condition_flags[g_nav_prompt_index];
                 u16 target = g_nav_ref_form_ids[g_nav_prompt_index];
-                if (current_condition & NAV_COND_GRAY) {
+                if (current_condition & (NAV_COND_GRAY | NAV_COND_DISABLE)) {
                     marker("HII_GRAPH_NAV_DISABLED_ACTION=BLOCKED");
                     speech_override = "disabled";
                     speech_override_length = 8u;
@@ -3441,6 +3451,28 @@ static int wait_navigation_keys(void *system_table) {
                         speech_override = g_nav_form_title;
                         speech_override_length = g_nav_form_title_length;
                         marker("HII_GRAPH_NAV_FORM_TITLE_SPEECH=PASS");
+                    }
+                    speak = 1;
+                } else if (g_nav_prompt_opcodes[g_nav_prompt_index] == 0x06u &&
+                           nav_stage_toggle_checkbox(system_table, g_nav_prompt_index)) {
+                    marker("HII_GRAPH_NAV_ENTER_CONTEXT_ACTION=PASS");
+                    marker("HII_GRAPH_NAV_ENTER_TOGGLE=PASS");
+                    marker("HII_GRAPH_NAV_STAGED_CHECKBOX=PASS");
+                    marker("HII_GRAPH_NAV_STAGED_EDIT=PASS");
+                    if (g_nav_m1603qa_308_profile) {
+                        if (!nav_refresh_current_form(system_table)) return 0;
+                        marker("HII_GRAPH_NAV_STAGED_DEPENDENCY_REFRESH=PASS");
+                    }
+                    speak = 1;
+                } else if (g_nav_prompt_opcodes[g_nav_prompt_index] == 0x05u &&
+                           nav_stage_cycle_oneof(system_table, g_nav_prompt_index, 1)) {
+                    marker("HII_GRAPH_NAV_ENTER_CONTEXT_ACTION=PASS");
+                    marker("HII_GRAPH_NAV_ENTER_CHOICE=PASS");
+                    marker("HII_GRAPH_NAV_STAGED_ONEOF=PASS");
+                    marker("HII_GRAPH_NAV_STAGED_EDIT=PASS");
+                    if (g_nav_m1603qa_308_profile) {
+                        if (!nav_refresh_current_form(system_table)) return 0;
+                        marker("HII_GRAPH_NAV_STAGED_DEPENDENCY_REFRESH=PASS");
                     }
                     speak = 1;
                 } else {
@@ -3643,8 +3675,11 @@ static int wait_navigation_keys(void *system_table) {
                 marker("HII_GRAPH_NAV_SAVE_BLOCKED=PASS");
                 marker("HII_GRAPH_NAV_NO_FIRMWARE_WRITE=PASS");
                 speak = 1;
-            } else if (key.unicode_char == (u16)'h' || key.unicode_char == (u16)'H') {
-                marker("HII_GRAPH_NAV_KEY=H");
+            } else if (key.unicode_char == (u16)'h' || key.unicode_char == (u16)'H' ||
+                       key.scan_code == 0x000bu) {
+                marker(key.scan_code == 0x000bu ? "HII_GRAPH_NAV_KEY=F1"
+                                                : "HII_GRAPH_NAV_KEY=H");
+                marker("HII_GRAPH_NAV_HELP_DISCOVERABLE=PASS");
                 speak = 1;
                 speak_help = 1;
             } else if (key.unicode_char == (u16)'v' || key.unicode_char == (u16)'V') {
@@ -3694,18 +3729,76 @@ static int wait_navigation_keys(void *system_table) {
                 nav_prompt_load(next);
                 speak = 1;
             } else if (key.scan_code == 0x0004u) {
-                /* EFI_SCAN_LEFT: previous focus alias. */
                 marker("HII_GRAPH_NAV_KEY=LEFT");
-                u8 next = g_nav_prompt_index ? (u8)(g_nav_prompt_index - 1u)
-                                             : (u8)(g_nav_prompt_total - 1u);
-                nav_prompt_load(next);
+                u8 op = g_nav_prompt_opcodes[g_nav_prompt_index];
+                if (op == 0x05u) {
+                    if (nav_stage_cycle_oneof(system_table, g_nav_prompt_index, -1)) {
+                        marker("HII_GRAPH_NAV_LEFT_RIGHT_EDIT=PASS");
+                        marker("HII_GRAPH_NAV_ARROW_CHOICE=PASS");
+                        if (g_nav_m1603qa_308_profile) {
+                            if (!nav_refresh_current_form(system_table)) return 0;
+                            marker("HII_GRAPH_NAV_STAGED_DEPENDENCY_REFRESH=PASS");
+                        }
+                    } else {
+                        speech_override = "no change";
+                        speech_override_length = 9u;
+                        marker("HII_GRAPH_NAV_ARROW_EDIT_BLOCKED=PASS");
+                    }
+                } else if (op == 0x07u) {
+                    if (nav_stage_adjust_numeric(system_table, g_nav_prompt_index, -1)) {
+                        marker("HII_GRAPH_NAV_LEFT_RIGHT_EDIT=PASS");
+                        marker("HII_GRAPH_NAV_ARROW_NUMERIC=PASS");
+                        if (g_nav_m1603qa_308_profile) {
+                            if (!nav_refresh_current_form(system_table)) return 0;
+                            marker("HII_GRAPH_NAV_STAGED_DEPENDENCY_REFRESH=PASS");
+                        }
+                    } else {
+                        speech_override = "no change";
+                        speech_override_length = 9u;
+                        marker("HII_GRAPH_NAV_ARROW_EDIT_BLOCKED=PASS");
+                    }
+                } else {
+                    u8 next = g_nav_prompt_index ? (u8)(g_nav_prompt_index - 1u)
+                                                 : (u8)(g_nav_prompt_total - 1u);
+                    nav_prompt_load(next);
+                    marker("HII_GRAPH_NAV_LEFT_FALLBACK_MOVE=PASS");
+                }
                 speak = 1;
             } else if (key.scan_code == 0x0003u) {
-                /* EFI_SCAN_RIGHT: next focus alias. */
                 marker("HII_GRAPH_NAV_KEY=RIGHT");
-                u8 next = (u8)(g_nav_prompt_index + 1u);
-                if (next >= g_nav_prompt_total) next = 0;
-                nav_prompt_load(next);
+                u8 op = g_nav_prompt_opcodes[g_nav_prompt_index];
+                if (op == 0x05u) {
+                    if (nav_stage_cycle_oneof(system_table, g_nav_prompt_index, 1)) {
+                        marker("HII_GRAPH_NAV_LEFT_RIGHT_EDIT=PASS");
+                        marker("HII_GRAPH_NAV_ARROW_CHOICE=PASS");
+                        if (g_nav_m1603qa_308_profile) {
+                            if (!nav_refresh_current_form(system_table)) return 0;
+                            marker("HII_GRAPH_NAV_STAGED_DEPENDENCY_REFRESH=PASS");
+                        }
+                    } else {
+                        speech_override = "no change";
+                        speech_override_length = 9u;
+                        marker("HII_GRAPH_NAV_ARROW_EDIT_BLOCKED=PASS");
+                    }
+                } else if (op == 0x07u) {
+                    if (nav_stage_adjust_numeric(system_table, g_nav_prompt_index, 1)) {
+                        marker("HII_GRAPH_NAV_LEFT_RIGHT_EDIT=PASS");
+                        marker("HII_GRAPH_NAV_ARROW_NUMERIC=PASS");
+                        if (g_nav_m1603qa_308_profile) {
+                            if (!nav_refresh_current_form(system_table)) return 0;
+                            marker("HII_GRAPH_NAV_STAGED_DEPENDENCY_REFRESH=PASS");
+                        }
+                    } else {
+                        speech_override = "no change";
+                        speech_override_length = 9u;
+                        marker("HII_GRAPH_NAV_ARROW_EDIT_BLOCKED=PASS");
+                    }
+                } else {
+                    u8 next = (u8)(g_nav_prompt_index + 1u);
+                    if (next >= g_nav_prompt_total) next = 0;
+                    nav_prompt_load(next);
+                    marker("HII_GRAPH_NAV_RIGHT_FALLBACK_MOVE=PASS");
+                }
                 speak = 1;
             } else if (key.unicode_char == 0x0009u) {
                 /* Tab advances focus without changing firmware values. */
@@ -3755,8 +3848,9 @@ static int wait_navigation_keys(void *system_table) {
                         speech_text = g_nav_help_text;
                         speech_length = g_nav_help_length;
                     } else {
-                        speech_text = "no help";
-                        speech_length = 7u;
+                        speech_text = "up down move left right change enter action escape back f1 help";
+                        speech_length = 63u;
+                        marker("HII_GRAPH_NAV_BUILTIN_HELP=PASS");
                     }
                 }
 
@@ -3913,6 +4007,14 @@ __attribute__((ms_abi)) u64 efi_main(void *image_handle, void *system_table) {
     marker("BDL_RUNTIME_TEXT_SCHEDULE=PASS");
 
 #ifdef QEV_INTERACTIVE_NAV
+    static const char discovery_speech[] = "ready press f1 for help";
+    if (!run_speech_dma(discovery_speech, 23u)) {
+        marker("STATUS=BLOCKED");
+        marker("REASON=HII_GRAPH_DISCOVERY_SPEECH_FAILED");
+        return 1;
+    }
+    marker("HII_GRAPH_NAV_DISCOVERY_PROMPT=PASS");
+
     const char *initial_speech = g_nav_speech_text;
     u8 initial_speech_length = g_nav_speech_length;
     if (nav_build_focus_speech(system_table, g_nav_prompt_index,
