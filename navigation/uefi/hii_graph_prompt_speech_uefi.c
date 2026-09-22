@@ -87,7 +87,6 @@ static stall_fn g_stall;
 static allocate_pages_fn g_allocate_pages;
 static u64 g_speech_dma_base;
 static u8 g_speech_dma_allocations;
-static u8 g_speech_stream_initialized;
 static u8 g_proof_overflow;
 static u8 g_speech_active;
 static u64 g_speech_timeout_us;
@@ -1151,17 +1150,18 @@ static int speech_dma_begin(const char *text, u32 text_count) {
     while (timeout-- && (sd[0] & 2u)) {}
     if (!timeout) return 0;
 
-    if (!g_speech_stream_initialized) {
-        sd[0] = (u8)(sd[0] | 1u);
-        timeout = 100000;
-        while (timeout-- && !(sd[0] & 1u)) {}
-        if (!timeout) return 0;
-        sd[0] = (u8)(sd[0] & ~1u);
-        timeout = 100000;
-        while (timeout-- && (sd[0] & 1u)) {}
-        if (!timeout) return 0;
-        g_speech_stream_initialized = 1u;
-    }
+    /* Reset the output stream for every DMA clip. Reusing a completed
+       descriptor can leave BCIS/LPIB state latched on QEMU and on some real
+       HDA controllers, especially when the next whole-word clip is shorter. */
+    sd[0] = (u8)(sd[0] | 1u);
+    timeout = 100000;
+    while (timeout-- && !(sd[0] & 1u)) {}
+    if (!timeout) return 0;
+    sd[0] = (u8)(sd[0] & ~1u);
+    timeout = 100000;
+    while (timeout-- && (sd[0] & 1u)) {}
+    if (!timeout) return 0;
+    marker("HII_GRAPH_SPEECH_STREAM_RESET_PER_CHUNK=PASS");
     sd[3] = 0x1cu;
     if (g_stall) g_stall(1000);
 
@@ -1202,6 +1202,7 @@ static int speech_dma_poll(u64 elapsed_step_us, u8 *progress_out) {
 
     volatile u8 *sd = speech_stream_descriptor();
     if (!sd) {
+        marker("HII_GRAPH_SPEECH_DMA_FAIL=NO_DESCRIPTOR");
         speech_dma_stop();
         return -1;
     }
@@ -1211,6 +1212,7 @@ static int speech_dma_poll(u64 elapsed_step_us, u8 *progress_out) {
     u8 status = sd[3];
     if (status & 0x04u) {
         int ok = lpib != 0;
+        if (!ok) marker("HII_GRAPH_SPEECH_DMA_FAIL=BCIS_ZERO_LPIB");
         speech_dma_stop();
         return ok ? 1 : -1;
     }
@@ -1220,6 +1222,7 @@ static int speech_dma_poll(u64 elapsed_step_us, u8 *progress_out) {
     else
         g_speech_elapsed_us += elapsed_step_us;
     if (g_speech_elapsed_us >= g_speech_timeout_us) {
+        marker("HII_GRAPH_SPEECH_DMA_FAIL=TIMEOUT");
         speech_dma_stop();
         return -1;
     }
