@@ -2,14 +2,13 @@ name: vmware-uefi-selfhosted
 
 on:
   workflow_dispatch:
-  pull_request:
-    paths:
-      - ".github/workflows/vmware-uefi-selfhosted.yml"
-      - "navigation/uefi/**"
-      - "voice/**"
 
 permissions:
   contents: read
+
+concurrency:
+  group: vmware-uefi-selfhosted
+  cancel-in-progress: false
 
 jobs:
   vmware-uefi-smoke:
