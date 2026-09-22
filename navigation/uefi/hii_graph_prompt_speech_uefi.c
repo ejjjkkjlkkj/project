@@ -145,8 +145,10 @@ static const efi_guid g_loaded_image_guid =
     {0x5b1b31a1u,0x9562u,0x11d2u,{0x8e,0x3f,0x00,0xa0,0xc9,0x69,0x72,0x3b}};
 static const efi_guid g_simple_fs_guid =
     {0x964e5b22u,0x6459u,0x11d2u,{0x8e,0x39,0x00,0xa0,0xc9,0x69,0x72,0x3b}};
+#ifdef QEV_INTERACTIVE_NAV
 static const efi_guid g_m1603qa_308_setup_package_list_guid =
     {0x899407d7u,0x99feu,0x43d8u,{0x9a,0x21,0x79,0xec,0x32,0x8c,0xac,0x21}};
+#endif
 
 static u8 g_hii_package[1024u * 1024u];
 static void *g_hii_handles[256];
@@ -1022,6 +1024,7 @@ static u16 rd16(const u8 *p) {
 static u32 rd32(const u8 *p) {
     return (u32)p[0] | ((u32)p[1] << 8) | ((u32)p[2] << 16) | ((u32)p[3] << 24);
 }
+#ifdef QEV_INTERACTIVE_NAV
 static int guid_bytes_equal(const u8 *p, const efi_guid *g) {
     if (!p || !g) return 0;
     if (rd32(p) != g->data1 || rd16(p + 4) != g->data2 || rd16(p + 6) != g->data3)
@@ -1030,6 +1033,7 @@ static int guid_bytes_equal(const u8 *p, const efi_guid *g) {
         if (p[8u + i] != g->data4[i]) return 0;
     return 1;
 }
+#endif
 static int prompt_opcode(u8 op) {
     switch (op) {
         case 0x02: case 0x03: case 0x05: case 0x06: case 0x07:
