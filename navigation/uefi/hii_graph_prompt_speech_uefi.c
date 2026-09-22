@@ -32,6 +32,8 @@ extern const u32 qev_unit_count;
 extern const u32 qev_sil_unit_index;
 extern const u8 qev_letter_unit_count[];
 extern const u8 qev_letter_units[];
+extern const u8 qev_digit_unit_count[];
+extern const u8 qev_digit_units[];
 
 #define MAX_NID 256
 #define MAX_CONN 64
@@ -864,8 +866,6 @@ static int speech_dma_begin(const char *text, u32 text_count) {
             continue;
         }
 
-        if (ch < (u8)'a' || ch > (u8)'z') return 0;
-
         if (i != 0u && text[i - 1u] != ' ') {
             if (total_bytes > dma_bytes - pcm_off ||
                 grapheme_gap_bytes > dma_bytes - pcm_off - total_bytes) return 0;
@@ -873,11 +873,22 @@ static int speech_dma_begin(const char *text, u32 text_count) {
             total_bytes += grapheme_gap_bytes;
         }
 
-        u32 li = (u32)(ch - (u8)'a');
-        u32 n = qev_letter_unit_count[li];
-        if (!n || n > 8u) return 0;
+        const u8 *unit_row = 0;
+        u32 n = 0;
+        if (ch >= (u8)'a' && ch <= (u8)'z') {
+            u32 li = (u32)(ch - (u8)'a');
+            n = qev_letter_unit_count[li];
+            unit_row = qev_letter_units + li * 8u;
+        } else if (ch >= (u8)'0' && ch <= (u8)'9') {
+            u32 di = (u32)(ch - (u8)'0');
+            n = qev_digit_unit_count[di];
+            unit_row = qev_digit_units + di * 8u;
+        } else {
+            return 0;
+        }
+        if (!unit_row || !n || n > 8u) return 0;
         for (u32 j = 0; j < n; ++j) {
-            u32 ui = qev_letter_units[li * 8u + j];
+            u32 ui = unit_row[j];
             if (ui >= qev_unit_count) return 0;
             u32 off = qev_unit_off[ui];
             u32 len = qev_unit_len[ui];
@@ -893,6 +904,7 @@ static int speech_dma_begin(const char *text, u32 text_count) {
     for (u32 i = 0; i < tail_silence_bytes; ++i) pcm[total_bytes + i] = 0;
     total_bytes += tail_silence_bytes;
     marker("HII_GRAPH_SPEECH_PACING=PASS");
+    marker("HII_GRAPH_SPEECH_DIGITS=PASS");
     marker("HII_GRAPH_SPEECH_LONG_LABEL_CAPACITY=PASS");
 
     u32 dma_payload = (total_bytes + 127u) & ~127u;
@@ -1156,7 +1168,8 @@ static int normalize_prompt(const u16 *text, char *out, u32 *count_out) {
     u8 pending_space = 0;
     for (u32 i = 0; i < 127u && text[i] && n < 32u; ++i) {
         u16 ch = fold_prompt_char(text[i]);
-        if (ch >= (u16)'a' && ch <= (u16)'z') {
+        if ((ch >= (u16)'a' && ch <= (u16)'z') ||
+            (ch >= (u16)'0' && ch <= (u16)'9')) {
             if (pending_space && n && n < 32u) out[n++] = ' ';
             if (n < 32u) out[n++] = (char)ch;
             pending_space = 0;
