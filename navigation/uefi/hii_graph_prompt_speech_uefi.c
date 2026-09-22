@@ -171,6 +171,8 @@ static u32 g_prompt_count;
 #define MAX_HII_VARSTORE_NAME 48
 #define MAX_HII_VAR_DATA 4096
 #define MAX_HII_OPTIONS_PER_PROMPT 8
+#define MAX_HII_QUESTIONS 768
+#define MAX_IFR_EXPR_STACK 32
 
 typedef struct {
     u8 valid;
@@ -185,6 +187,19 @@ typedef struct {
 static nav_varstore_desc g_nav_varstores[MAX_HII_VARSTORES];
 static u8 g_nav_varstore_total;
 static u8 g_nav_var_data[MAX_HII_VAR_DATA];
+
+typedef struct {
+    u8 valid;
+    u8 handle_index;
+    u8 opcode;
+    u8 value_width;
+    u16 question_id;
+    u16 varstore_id;
+    u16 var_info;
+} nav_question_desc;
+
+static nav_question_desc g_nav_questions[MAX_HII_QUESTIONS];
+static u16 g_nav_question_total;
 
 static char g_nav_prompts[MAX_HII_NAV_PROMPTS][33];
 static u8 g_nav_prompt_lengths[MAX_HII_NAV_PROMPTS];
@@ -1197,6 +1212,37 @@ static nav_varstore_desc *nav_find_varstore(u8 handle_index, u16 varstore_id) {
     return 0;
 }
 
+static void nav_question_add(u8 handle_index, u8 opcode, u8 value_width,
+                             u16 question_id, u16 varstore_id, u16 var_info) {
+    if (!question_id) return;
+    for (u16 i = 0u; i < g_nav_question_total; ++i) {
+        nav_question_desc *d = &g_nav_questions[i];
+        if (d->valid && d->handle_index == handle_index &&
+            d->question_id == question_id) return;
+    }
+    if (g_nav_question_total >= MAX_HII_QUESTIONS) {
+        g_nav_prompt_overflow = 1u;
+        return;
+    }
+    nav_question_desc *d = &g_nav_questions[g_nav_question_total++];
+    d->valid = 1u;
+    d->handle_index = handle_index;
+    d->opcode = opcode;
+    d->value_width = value_width;
+    d->question_id = question_id;
+    d->varstore_id = varstore_id;
+    d->var_info = var_info;
+}
+
+static nav_question_desc *nav_find_question(u8 handle_index, u16 question_id) {
+    for (u16 i = 0u; i < g_nav_question_total; ++i) {
+        nav_question_desc *d = &g_nav_questions[i];
+        if (d->valid && d->handle_index == handle_index &&
+            d->question_id == question_id) return d;
+    }
+    return 0;
+}
+
 static void nav_option_add(u8 prompt_index, u64 value,
                            const char *text, u32 count) {
     if (prompt_index >= g_nav_prompt_total || !text || !count || count > 32u) return;
@@ -1293,16 +1339,12 @@ static int nav_live_value_text(void *system_table, u8 prompt_index,
            ((*text_out = g_nav_value_text), (*length_out = g_nav_value_length), 1);
 }
 
-static int nav_read_scalar_value(void *system_table, u8 prompt_index,
-                                 u64 *value_out) {
-    if (!system_table || !value_out || prompt_index >= g_nav_prompt_total) return 0;
-    u8 width = g_nav_prompt_value_widths[prompt_index];
-    u16 varstore_id = g_nav_prompt_varstore_ids[prompt_index];
-    u16 var_info = g_nav_prompt_var_infos[prompt_index];
-    if (!width || width > 8u || !varstore_id) return 0;
-
-    nav_varstore_desc *d =
-        nav_find_varstore(g_nav_prompt_handle_indices[prompt_index], varstore_id);
+static int nav_read_varstore_scalar(void *system_table, u8 handle_index,
+                                    u16 varstore_id, u16 var_info, u8 width,
+                                    u64 *value_out) {
+    if (!system_table || !value_out || !width || width > 8u || !varstore_id)
+        return 0;
+    nav_varstore_desc *d = nav_find_varstore(handle_index, varstore_id);
     if (!d || !d->name[0] || !d->size || d->size > MAX_HII_VAR_DATA) return 0;
     if ((u32)var_info + (u32)width > (u32)d->size) return 0;
 
@@ -1330,6 +1372,140 @@ static int nav_read_scalar_value(void *system_table, u8 prompt_index,
     for (u8 i = 0u; i < width; ++i)
         value |= ((u64)g_nav_var_data[(u32)var_info + i]) << (8u * i);
     *value_out = value;
+    return 1;
+}
+
+static int nav_read_question_value(void *system_table, u8 handle_index,
+                                   u16 question_id, u64 *value_out) {
+    nav_question_desc *q = nav_find_question(handle_index, question_id);
+    if (!q || !q->value_width) return 0;
+    return nav_read_varstore_scalar(system_table, handle_index, q->varstore_id,
+                                    q->var_info, q->value_width, value_out);
+}
+
+static int nav_read_scalar_value(void *system_table, u8 prompt_index,
+                                 u64 *value_out) {
+    if (!system_table || !value_out || prompt_index >= g_nav_prompt_total) return 0;
+    return nav_read_varstore_scalar(
+        system_table, g_nav_prompt_handle_indices[prompt_index],
+        g_nav_prompt_varstore_ids[prompt_index],
+        g_nav_prompt_var_infos[prompt_index],
+        g_nav_prompt_value_widths[prompt_index], value_out);
+}
+
+typedef struct {
+    u8 known;
+    u64 value;
+} nav_expr_value;
+
+static int nav_eval_condition_expression(void *system_table, u8 handle_index,
+                                         const u8 *first, const u8 *limit,
+                                         u8 *result_out,
+                                         const u8 **after_expression_out) {
+    if (!system_table || !first || !limit || first + 2u > limit ||
+        !result_out || !after_expression_out) return -1;
+
+    nav_expr_value stack[MAX_IFR_EXPR_STACK];
+    u8 sp = 0u;
+    const u8 *q = first;
+    u8 first_scope = (u8)(q[1] >> 7);
+    u8 depth = first_scope ? 1u : 0u;
+    u8 done = 0u;
+
+    while (!done) {
+        if (q + 2u > limit) return -1;
+        u8 op = q[0];
+        u8 header = q[1];
+        u32 len = (u32)(header & 0x7fu);
+        if (len < 2u || q + len > limit) return -1;
+
+        if (op == 0x29u) {
+            if (!first_scope || !depth) return -1;
+            --depth;
+            q += len;
+            if (!depth) done = 1u;
+            continue;
+        }
+
+        nav_expr_value out;
+        out.known = 1u;
+        out.value = 0u;
+        if (op == 0x46u) { /* TRUE */
+            out.value = 1u;
+        } else if (op == 0x47u) { /* FALSE */
+            out.value = 0u;
+        } else if (op == 0x12u && len >= 6u) { /* EQ_ID_VAL */
+            u64 live = 0u;
+            out.known = (u8)nav_read_question_value(
+                system_table, handle_index, rd16(q + 2), &live);
+            out.value = (u64)(live == (u64)rd16(q + 4));
+        } else if (op == 0x13u && len >= 6u) { /* EQ_ID_ID */
+            u64 left = 0u, right = 0u;
+            u8 kl = (u8)nav_read_question_value(
+                system_table, handle_index, rd16(q + 2), &left);
+            u8 kr = (u8)nav_read_question_value(
+                system_table, handle_index, rd16(q + 4), &right);
+            out.known = (u8)(kl && kr);
+            out.value = (u64)(left == right);
+        } else if (op == 0x14u && len >= 8u) { /* EQ_ID_VAL_LIST */
+            u16 count = rd16(q + 4);
+            if ((u32)6u + (u32)count * 2u > len) return -1;
+            u64 live = 0u;
+            out.known = (u8)nav_read_question_value(
+                system_table, handle_index, rd16(q + 2), &live);
+            out.value = 0u;
+            if (out.known) {
+                for (u16 i = 0u; i < count; ++i) {
+                    if (live == (u64)rd16(q + 6u + (u32)i * 2u)) {
+                        out.value = 1u;
+                        break;
+                    }
+                }
+            }
+        } else if (op == 0x17u) { /* NOT */
+            if (!sp) return -1;
+            out = stack[--sp];
+            if (out.known) out.value = (u64)!out.value;
+        } else if (op == 0x15u || op == 0x16u) { /* AND / OR */
+            if (sp < 2u) return -1;
+            nav_expr_value right = stack[--sp];
+            nav_expr_value left = stack[--sp];
+            if (op == 0x15u) {
+                if ((left.known && !left.value) || (right.known && !right.value)) {
+                    out.known = 1u;
+                    out.value = 0u;
+                } else if (left.known && right.known) {
+                    out.known = 1u;
+                    out.value = (u64)(left.value && right.value);
+                } else {
+                    out.known = 0u;
+                }
+            } else {
+                if ((left.known && left.value) || (right.known && right.value)) {
+                    out.known = 1u;
+                    out.value = 1u;
+                } else if (left.known && right.known) {
+                    out.known = 1u;
+                    out.value = 0u;
+                } else {
+                    out.known = 0u;
+                }
+            }
+        } else {
+            out.known = 0u;
+        }
+
+        if (sp >= MAX_IFR_EXPR_STACK) return -1;
+        stack[sp++] = out;
+        if (header & 0x80u) ++depth;
+        q += len;
+        if (!first_scope) done = 1u;
+    }
+
+    if (sp != 1u) return -1;
+    *after_expression_out = q;
+    if (!stack[0].known) return 0;
+    *result_out = (u8)!!stack[0].value;
     return 1;
 }
 
