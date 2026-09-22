@@ -14,6 +14,8 @@ required = (
     'HII_GRAPH_SPEECH_WORD_PRONUNCIATION=PASS',
     'HII_GRAPH_SPEECH_WORD_FALLBACK=LETTER_NAMES',
     'HII_GRAPH_SPEECH_UNKNOWN_WORD_FALLBACK=PASS',
+    'HII_GRAPH_SPEECH_SPOKEN_SPELLING_CLIP=PASS',
+    'HII_GRAPH_SPEECH_NO_TONAL_FALLBACK=PASS',
     'speech_lookup_word',
     'qev_word_count',
     'qev_word_name_stride',
@@ -22,6 +24,27 @@ required = (
     'qev_word_names',
     'qev_word_unit_count',
     'qev_word_units',
+    'qev_word_pcm_bank',
+    'qev_word_pcm_bank_len',
+    'qev_word_pcm_rate_hz',
+    'qev_word_pcm_off',
+    'qev_word_pcm_len',
+    'qev_letter_pcm_bank',
+    'qev_letter_pcm_bank_len',
+    'qev_letter_pcm_off',
+    'qev_letter_pcm_len',
+    'qev_digit_pcm_bank',
+    'qev_digit_pcm_bank_len',
+    'qev_digit_pcm_off',
+    'qev_digit_pcm_len',
+    'speech_append_pcm8_16k',
+    'HII_GRAPH_SPEECH_WHOLE_WORD_CLIP=PASS',
+    'HII_GRAPH_SPEECH_VOICECORE_WORD_MODE=PASS',
+    'HII_GRAPH_SPEECH_SHORT_CLIP_TIMEOUT_FLOOR=PASS',
+    'HII_GRAPH_SPEECH_STREAM_RESET_PER_CHUNK=PASS',
+    'HII_GRAPH_SPEECH_STALE_BCIS_CLEARED=PASS',
+    'dma_pages = 4096u',
+    'entries >= 256u',
     'phoneme_gap_bytes = 0u',
     'grapheme_gap_bytes = 18u * 192u',
     'HII_GRAPH_SPEECH_CONTINUOUS_PHONEMES=PASS',
@@ -30,7 +53,7 @@ required = (
     'HII_GRAPH_SPEECH_CHUNK_CONTINUE=PASS',
     'HII_GRAPH_SPEECH_PHRASE_COMPLETE=PASS',
     'QEV_NAV_TEXT_MAX 64u',
-    'QEV_SPEECH_CHUNK_MAX 32u',
+    'QEV_SPEECH_CHUNK_MAX 64u',
     'speech_phrase_begin',
     'speech_phrase_poll',
     'speech_phrase_cancel',
@@ -321,7 +344,7 @@ assert "g_nav_prompt_opcodes[prompt_index] != 0x07u" in ss
 
 
 # HII text may be retained beyond one DMA chunk, but each low-level DMA build
-# remains bounded to 32 characters and navigation uses the phrase queue.
+# accepts the full 64-character navigation phrase in one DMA stream.
 norm_start = text.index("static int normalize_prompt")
 norm_end = text.index("static int get_hii_string", norm_start)
 norm = text[norm_start:norm_end]
@@ -330,7 +353,7 @@ assert "QEV_NAV_TEXT_MAX" in norm
 dma_start = text.index("static int speech_dma_begin")
 dma_end = text.index("static int speech_dma_poll", dma_start)
 dma = text[dma_start:dma_end]
-assert "text_count > 32u" in dma
+assert "text_count > QEV_SPEECH_CHUNK_MAX" in dma
 
 wait_start = text.index("static int wait_navigation_keys")
 wait_end = text.index("#endif", wait_start)
@@ -354,13 +377,14 @@ assert "speech_phrase_begin" in run and "speech_phrase_poll" in run
 
 
 # Common-word pronunciation must be attempted only at word boundaries and
-# unknown words must retain the proven letter-name fallback.
+# unknown words must use spoken VoiceCore letter/digit clips, never tonal allophones.
 sd_start = text.index("static int speech_dma_begin")
 sd_end = text.index("static int speech_dma_poll", sd_start)
 sd = text[sd_start:sd_end]
 assert "speech_lookup_word(text + i, word_length" in sd
 assert "(i == 0u || text[i - 1u] == ' ')" in sd
-assert "qev_letter_unit_count" in sd and "qev_digit_unit_count" in sd
-assert sd.index("speech_lookup_word(text + i, word_length") < sd.index("qev_letter_unit_count")
+assert "qev_letter_pcm_off" in sd and "qev_digit_pcm_off" in sd
+assert "HII_GRAPH_SPEECH_SPOKEN_SPELLING_CLIP=PASS" in sd
+assert sd.index("speech_lookup_word(text + i, word_length") < sd.index("qev_letter_pcm_off")
 
 print("SCREEN_READER_NAVIGATION_SOURCE_CONTRACT=PASS")

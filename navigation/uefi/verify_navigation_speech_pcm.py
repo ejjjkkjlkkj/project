@@ -3,7 +3,7 @@
 
 This proves emitted content, not human intelligibility. It pairs the F1, Down
 and Up runtime speech strings from the serial log with the actual QEMU WAV,
-reproduces the firmware's <=32-character word-boundary chunking, and requires
+reproduces the firmware's <=64-character word-boundary chunking, and requires
 ordered, bit-identical captured speech.
 
 Consecutive DMA chunks contain deliberate leading/trailing zero PCM. Those
@@ -32,7 +32,7 @@ KEY_MARKERS = {
 }
 EXPECTED_KEYS = ("F1", "DOWN", "UP")
 MAX_PHRASE = 64
-MAX_CHUNK = 32
+MAX_CHUNK = 64
 PCM_FRAME_BYTES = 4
 ZERO_FRAME = bytes(PCM_FRAME_BYTES)
 

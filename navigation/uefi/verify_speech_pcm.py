@@ -10,8 +10,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import struct
 import sys
 import wave
+from functools import lru_cache
 from pathlib import Path
 
 import generate_units as gu
@@ -23,6 +25,7 @@ PHONEME_GAP_BYTES = 0
 TAIL_SILENCE_BYTES = 45 * 192
 
 
+@lru_cache(maxsize=1)
 def converted_units() -> dict[str, bytes]:
     speech = gu.load_source()
     names = sorted(
@@ -38,9 +41,51 @@ def converted_units() -> dict[str, bytes]:
     }
 
 
+@lru_cache(maxsize=1)
+def compact_word_clips() -> dict[str, bytes]:
+    voicecore = gu.load_voicecore()
+    return {
+        word: gu.compact_voice_clip(voicecore.synthesize(word, "screen"))
+        for word in sorted(gu.WORD_UNITS)
+    }
+
+
+@lru_cache(maxsize=1)
+def compact_spelling_clips() -> tuple[dict[str, bytes], dict[str, bytes]]:
+    voicecore = gu.load_voicecore()
+    letters = {
+        ch: gu.compact_voice_clip(
+            voicecore.synthesize(voicecore.LETTER_NAMES[ch], "screen")
+        )
+        for ch in "abcdefghijklmnopqrstuvwxyz"
+    }
+    digits = {
+        ch: gu.compact_voice_clip(
+            voicecore.synthesize(voicecore.DIGITS[ch], "screen")
+        )
+        for ch in "0123456789"
+    }
+    return letters, digits
+
+
+def _trunc_div3(value: int) -> int:
+    return value // 3 if value >= 0 else -((-value) // 3)
+
+
+def expand_pcm8_16k(src: bytes) -> bytes:
+    out = bytearray()
+    for i, value in enumerate(src):
+        a = (value - 128) * 256
+        b = a if i + 1 >= len(src) else (src[i + 1] - 128) * 256
+        for phase in range(3):
+            sample = a + _trunc_div3((b - a) * phase)
+            out += struct.pack("<hh", sample, sample)
+    return bytes(out)
+
+
 def render_runtime_pcm(text: str) -> bytes:
-    if not text or len(text) > 32:
-        raise ValueError("runtime speech text must be 1..32 characters")
+    if not text or len(text) > 64:
+        raise ValueError("runtime speech text must be 1..64 characters")
 
     units = converted_units()
     pcm = bytearray(LEAD_SILENCE_BYTES)
@@ -57,27 +102,24 @@ def render_runtime_pcm(text: str) -> bytes:
             while i + word_length < len(text) and text[i + word_length] != " ":
                 word_length += 1
             word = text[i : i + word_length]
-            sequence = gu.WORD_UNITS.get(word)
-            if sequence:
-                for index, unit_name in enumerate(sequence):
-                    if index:
-                        pcm += bytes(PHONEME_GAP_BYTES)
-                    pcm += units[unit_name]
+            clip = compact_word_clips().get(word)
+            if clip:
+                pcm += expand_pcm8_16k(clip)
                 i += word_length
                 continue
 
         if i != 0 and text[i - 1] != " ":
             pcm += bytes(GRAPHEME_GAP_BYTES)
 
+        letters, digits = compact_spelling_clips()
         if "a" <= ch <= "z":
-            sequence = gu.LETTER_UNITS[ch]
+            clip = letters[ch]
         elif "0" <= ch <= "9":
-            sequence = gu.DIGIT_UNITS[ch]
+            clip = digits[ch]
         else:
             raise ValueError(f"unsupported runtime character: {ch!r}")
 
-        for unit_name in sequence:
-            pcm += units[unit_name]
+        pcm += expand_pcm8_16k(clip)
         i += 1
 
     pcm += bytes(TAIL_SILENCE_BYTES)

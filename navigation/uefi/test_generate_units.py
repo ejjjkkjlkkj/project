@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from generate_units import (
     DIGIT_UNITS, LETTER_UNITS, WORD_NAME_STRIDE, WORD_UNIT_STRIDE,
-    WORD_UNITS, convert, load_source,
+    WORD_UNITS, compact_voice_clip, convert, load_source, load_voicecore,
 )
 
 MAX_BANK_BYTES = 128 * 4096 - 0x1000
@@ -44,9 +44,37 @@ def main() -> None:
     silence = converted["sil"]
     assert silence == bytes(len(silence)), "converted silence must remain digital zero"
 
+    voicecore = load_voicecore()
+    word_clips = {
+        word: compact_voice_clip(voicecore.synthesize(word, "screen"))
+        for word in sorted(WORD_UNITS)
+    }
+    assert all(word_clips.values())
+    assert all(len(set(clip)) > 16 for clip in word_clips.values()), "word clips must contain speech, not tones/silence"
+    word_bank_bytes = sum(map(len, word_clips.values()))
+    assert word_bank_bytes <= 8 * 1024 * 1024
+    assert len(word_clips["ready"]) > 1000
+
+    letter_clips = {
+        ch: compact_voice_clip(voicecore.synthesize(voicecore.LETTER_NAMES[ch], "screen"))
+        for ch in "abcdefghijklmnopqrstuvwxyz"
+    }
+    digit_clips = {
+        ch: compact_voice_clip(voicecore.synthesize(voicecore.DIGITS[ch], "screen"))
+        for ch in "0123456789"
+    }
+    assert all(letter_clips.values()) and all(digit_clips.values())
+    assert all(len(set(clip)) > 16 for clip in letter_clips.values())
+    assert all(len(set(clip)) > 16 for clip in digit_clips.values())
+    letter_bank_bytes = sum(map(len, letter_clips.values()))
+    digit_bank_bytes = sum(map(len, digit_clips.values()))
+
     print(f"source-rate={speech.SAMPLE_RATE}")
     print(f"unit-count={len(converted)}")
     print(f"bank-bytes={bank_bytes}")
+    print(f"word-pcm-bank-bytes={word_bank_bytes}")
+    print(f"letter-pcm-bank-bytes={letter_bank_bytes}")
+    print(f"digit-pcm-bank-bytes={digit_bank_bytes}")
     print(f"word-lexicon-count={len(WORD_UNITS)}")
     print("VOICE_NAVIGATION_CONTRACT=PASS")
 

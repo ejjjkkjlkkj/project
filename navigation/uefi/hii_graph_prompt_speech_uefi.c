@@ -43,6 +43,19 @@ extern const u8 qev_word_name_len[];
 extern const u8 qev_word_names[];
 extern const u8 qev_word_unit_count[];
 extern const u8 qev_word_units[];
+extern const u8 qev_word_pcm_bank[];
+extern const u32 qev_word_pcm_bank_len;
+extern const u32 qev_word_pcm_rate_hz;
+extern const u32 qev_word_pcm_off[];
+extern const u32 qev_word_pcm_len[];
+extern const u8 qev_letter_pcm_bank[];
+extern const u32 qev_letter_pcm_bank_len;
+extern const u32 qev_letter_pcm_off[];
+extern const u32 qev_letter_pcm_len[];
+extern const u8 qev_digit_pcm_bank[];
+extern const u32 qev_digit_pcm_bank_len;
+extern const u32 qev_digit_pcm_off[];
+extern const u32 qev_digit_pcm_len[];
 
 #define MAX_NID 256
 #define MAX_CONN 64
@@ -50,7 +63,7 @@ extern const u8 qev_word_units[];
 #define INVALID_RESP 0xffffffffu
 
 #define QEV_NAV_TEXT_MAX 64u
-#define QEV_SPEECH_CHUNK_MAX 32u
+#define QEV_SPEECH_CHUNK_MAX 64u
 
 #define WIDGET_AUDIO_OUTPUT 0x0
 #define WIDGET_AUDIO_INPUT  0x1
@@ -82,7 +95,6 @@ static stall_fn g_stall;
 static allocate_pages_fn g_allocate_pages;
 static u64 g_speech_dma_base;
 static u8 g_speech_dma_allocations;
-static u8 g_speech_stream_initialized;
 static u8 g_proof_overflow;
 static u8 g_speech_active;
 static u64 g_speech_timeout_us;
@@ -933,9 +945,10 @@ static void speech_dma_stop(void) {
 }
 
 static int speech_lookup_word(const char *text, u32 length,
-                              const u8 **unit_row_out, u32 *unit_count_out) {
-    if (!text || !length || !unit_row_out || !unit_count_out ||
-        !qev_word_count || !qev_word_name_stride || !qev_word_unit_stride)
+                              const u8 **clip_out, u32 *clip_bytes_out) {
+    if (!text || !length || !clip_out || !clip_bytes_out ||
+        !qev_word_count || !qev_word_name_stride ||
+        !qev_word_pcm_bank_len || qev_word_pcm_rate_hz != 16000u)
         return 0;
     for (u32 wi = 0u; wi < qev_word_count; ++wi) {
         if ((u32)qev_word_name_len[wi] != length) continue;
@@ -948,19 +961,50 @@ static int speech_lookup_word(const char *text, u32 length,
             }
         }
         if (!same) continue;
-        u32 count = qev_word_unit_count[wi];
-        if (!count || count > qev_word_unit_stride) return 0;
-        *unit_row_out = qev_word_units + wi * qev_word_unit_stride;
-        *unit_count_out = count;
+        u32 off = qev_word_pcm_off[wi];
+        u32 len = qev_word_pcm_len[wi];
+        if (!len || off > qev_word_pcm_bank_len ||
+            len > qev_word_pcm_bank_len - off) return 0;
+        *clip_out = qev_word_pcm_bank + off;
+        *clip_bytes_out = len;
         return 1;
     }
     return 0;
 }
 
+static int speech_append_pcm8_16k(volatile u8 *pcm, u32 *total_bytes,
+                                  u32 capacity_bytes,
+                                  const u8 *src, u32 src_bytes) {
+    if (!pcm || !total_bytes || !src || !src_bytes) return 0;
+    if (src_bytes > 0x0fffffffu) return 0;
+    u32 need = src_bytes * 12u;
+    if (*total_bytes > capacity_bytes || need > capacity_bytes - *total_bytes)
+        return 0;
+    u32 dst = *total_bytes;
+    for (u32 i = 0u; i < src_bytes; ++i) {
+        int a = ((int)src[i] - 128) * 256;
+        int b = a;
+        if (i + 1u < src_bytes)
+            b = ((int)src[i + 1u] - 128) * 256;
+        for (u32 phase = 0u; phase < 3u; ++phase) {
+            int sample = a + ((b - a) * (int)phase) / 3;
+            u16 bits = (u16)sample;
+            u8 lo = (u8)(bits & 0xffu);
+            u8 hi = (u8)(bits >> 8);
+            pcm[dst++] = lo;
+            pcm[dst++] = hi;
+            pcm[dst++] = lo;
+            pcm[dst++] = hi;
+        }
+    }
+    *total_bytes = dst;
+    return 1;
+}
+
 static int speech_dma_begin(const char *text, u32 text_count) {
-    if (!g_allocate_pages || !g_stall || !text || !text_count || text_count > 32u) return 0;
-    const u32 pcm_off = 0x1000u;
-    const u32 dma_pages = 2048u;
+    if (!g_allocate_pages || !g_stall || !text || !text_count || text_count > QEV_SPEECH_CHUNK_MAX) return 0;
+    const u32 pcm_off = 0x2000u;
+    const u32 dma_pages = 4096u;
     const u32 dma_bytes = dma_pages * 4096u;
     if (!qev_unit_bank_len || pcm_off >= dma_bytes) return 0;
 
@@ -971,9 +1015,10 @@ static int speech_dma_begin(const char *text, u32 text_count) {
      * interruption while avoiding one BDL descriptor per allophone and the
      * alignment failures seen with longer HII labels.
      *
-     * Worst-case 32-character French letter-name spelling is about 4.36 MiB
-     * (all 'w'). Reserve 8 MiB and up to 128 BDL entries so VoiceCore v4
-     * full-letter clips also fit for every accepted 32-character label.
+     * Worst-case 64-character French letter-name spelling can exceed 8 MiB.
+     * Reserve 16 MiB and up to 256 BDL entries so a complete semantic phrase
+     * fits in one HDA stream. Avoiding an artificial 32-character split also
+     * prevents zero-LPIB restart failures between adjacent speech chunks.
      * Playback stays interruptible,
      * so the larger worst-case timeout never blocks keyboard focus changes.
      */
@@ -997,6 +1042,7 @@ static int speech_dma_begin(const char *text, u32 text_count) {
     const u32 lead_silence_bytes = 30u * 192u;
     const u32 grapheme_gap_bytes = 18u * 192u;
     const u32 phoneme_gap_bytes = 0u;
+    (void)phoneme_gap_bytes;
     const u32 tail_silence_bytes = 45u * 192u;
     u32 total_bytes = lead_silence_bytes;
     if (total_bytes > dma_bytes - pcm_off) return 0;
@@ -1022,32 +1068,17 @@ static int speech_dma_begin(const char *text, u32 text_count) {
             while (i + word_length < text_count &&
                    text[i + word_length] != ' ')
                 ++word_length;
-            const u8 *word_units = 0;
-            u32 word_unit_count = 0u;
+            const u8 *word_clip = 0;
+            u32 word_clip_bytes = 0u;
             if (speech_lookup_word(text + i, word_length,
-                                   &word_units, &word_unit_count)) {
-                for (u32 j = 0u; j < word_unit_count; ++j) {
-                    if (j) {
-                        if (total_bytes > dma_bytes - pcm_off ||
-                            phoneme_gap_bytes > dma_bytes - pcm_off - total_bytes)
-                            return 0;
-                        for (u32 gap = 0u; gap < phoneme_gap_bytes; ++gap)
-                            pcm[total_bytes + gap] = 0;
-                        total_bytes += phoneme_gap_bytes;
-                    }
-                    u32 ui = word_units[j];
-                    if (ui >= qev_unit_count) return 0;
-                    u32 off = qev_unit_off[ui];
-                    u32 len = qev_unit_len[ui];
-                    if (!len || off > qev_unit_bank_len ||
-                        len > qev_unit_bank_len - off) return 0;
-                    if (total_bytes > dma_bytes - pcm_off ||
-                        len > dma_bytes - pcm_off - total_bytes) return 0;
-                    copy_bytes(pcm + total_bytes, qev_unit_bank + off, len);
-                    total_bytes += len;
-                }
+                                   &word_clip, &word_clip_bytes)) {
+                if (!speech_append_pcm8_16k(
+                        pcm, &total_bytes, dma_bytes - pcm_off,
+                        word_clip, word_clip_bytes))
+                    return 0;
                 i += word_length - 1u;
                 marker("HII_GRAPH_SPEECH_WORD_PRONUNCIATION=PASS");
+                marker("HII_GRAPH_SPEECH_WHOLE_WORD_CLIP=PASS");
                 continue;
             }
             marker("HII_GRAPH_SPEECH_WORD_FALLBACK=LETTER_NAMES");
@@ -1060,30 +1091,32 @@ static int speech_dma_begin(const char *text, u32 text_count) {
             total_bytes += grapheme_gap_bytes;
         }
 
-        const u8 *unit_row = 0;
-        u32 n = 0;
+        const u8 *spell_clip = 0;
+        u32 spell_bytes = 0u;
         if (ch >= (u8)'a' && ch <= (u8)'z') {
             u32 li = (u32)(ch - (u8)'a');
-            n = qev_letter_unit_count[li];
-            unit_row = qev_letter_units + li * 8u;
+            u32 off = qev_letter_pcm_off[li];
+            u32 len = qev_letter_pcm_len[li];
+            if (!len || off > qev_letter_pcm_bank_len ||
+                len > qev_letter_pcm_bank_len - off) return 0;
+            spell_clip = qev_letter_pcm_bank + off;
+            spell_bytes = len;
         } else if (ch >= (u8)'0' && ch <= (u8)'9') {
             u32 di = (u32)(ch - (u8)'0');
-            n = qev_digit_unit_count[di];
-            unit_row = qev_digit_units + di * 8u;
+            u32 off = qev_digit_pcm_off[di];
+            u32 len = qev_digit_pcm_len[di];
+            if (!len || off > qev_digit_pcm_bank_len ||
+                len > qev_digit_pcm_bank_len - off) return 0;
+            spell_clip = qev_digit_pcm_bank + off;
+            spell_bytes = len;
         } else {
             return 0;
         }
-        if (!unit_row || !n || n > 8u) return 0;
-        for (u32 j = 0; j < n; ++j) {
-            u32 ui = unit_row[j];
-            if (ui >= qev_unit_count) return 0;
-            u32 off = qev_unit_off[ui];
-            u32 len = qev_unit_len[ui];
-            if (!len || off > qev_unit_bank_len || len > qev_unit_bank_len - off) return 0;
-            if (total_bytes > dma_bytes - pcm_off || len > dma_bytes - pcm_off - total_bytes) return 0;
-            copy_bytes(pcm + total_bytes, qev_unit_bank + off, len);
-            total_bytes += len;
-        }
+        if (!speech_append_pcm8_16k(
+                pcm, &total_bytes, dma_bytes - pcm_off,
+                spell_clip, spell_bytes))
+            return 0;
+        marker("HII_GRAPH_SPEECH_SPOKEN_SPELLING_CLIP=PASS");
     }
     if (!total_bytes) return 0;
     if (total_bytes > dma_bytes - pcm_off ||
@@ -1094,7 +1127,9 @@ static int speech_dma_begin(const char *text, u32 text_count) {
     marker("HII_GRAPH_SPEECH_CONTINUOUS_PHONEMES=PASS");
     marker("HII_GRAPH_SPEECH_DIGITS=PASS");
     marker("HII_GRAPH_SPEECH_HYBRID_WORD_MODE=PASS");
+    marker("HII_GRAPH_SPEECH_VOICECORE_WORD_MODE=PASS");
     marker("HII_GRAPH_SPEECH_UNKNOWN_WORD_FALLBACK=PASS");
+    marker("HII_GRAPH_SPEECH_NO_TONAL_FALLBACK=PASS");
     marker("HII_GRAPH_SPEECH_LONG_LABEL_CAPACITY=PASS");
 
     u32 dma_payload = (total_bytes + 127u) & ~127u;
@@ -1105,7 +1140,7 @@ static int speech_dma_begin(const char *text, u32 text_count) {
     u32 entries = 0;
     u32 described = 0;
     while (described < dma_payload) {
-        if (entries >= 128u) return 0;
+        if (entries >= 256u) return 0;
         u32 len = dma_payload - described;
         if (len > max_bdl_bytes) len = max_bdl_bytes;
         volatile u8 *e = bdl + entries * 16u;
@@ -1127,17 +1162,18 @@ static int speech_dma_begin(const char *text, u32 text_count) {
     while (timeout-- && (sd[0] & 2u)) {}
     if (!timeout) return 0;
 
-    if (!g_speech_stream_initialized) {
-        sd[0] = (u8)(sd[0] | 1u);
-        timeout = 100000;
-        while (timeout-- && !(sd[0] & 1u)) {}
-        if (!timeout) return 0;
-        sd[0] = (u8)(sd[0] & ~1u);
-        timeout = 100000;
-        while (timeout-- && (sd[0] & 1u)) {}
-        if (!timeout) return 0;
-        g_speech_stream_initialized = 1u;
-    }
+    /* Reset the output stream for every DMA clip. Reusing a completed
+       descriptor can leave BCIS/LPIB state latched on QEMU and on some real
+       HDA controllers, especially when the next whole-word clip is shorter. */
+    sd[0] = (u8)(sd[0] | 1u);
+    timeout = 100000;
+    while (timeout-- && !(sd[0] & 1u)) {}
+    if (!timeout) return 0;
+    sd[0] = (u8)(sd[0] & ~1u);
+    timeout = 100000;
+    while (timeout-- && (sd[0] & 1u)) {}
+    if (!timeout) return 0;
+    marker("HII_GRAPH_SPEECH_STREAM_RESET_PER_CHUNK=PASS");
     sd[3] = 0x1cu;
     if (g_stall) g_stall(1000);
 
@@ -1156,6 +1192,11 @@ static int speech_dma_begin(const char *text, u32 text_count) {
        keyboard focus can cancel the current utterance immediately. */
     u64 play_us = (((u64)dma_payload * 125ull) + 23ull) / 24ull;
     play_us += 150000ull;
+    /* Short whole-word clips can reach the controller before QEMU/real HDA
+       advances LPIB. Keep completion interrupt-driven but give startup a
+       generous floor; keyboard interruption remains immediate and async. */
+    if (play_us < 2000000ull) play_us = 2000000ull;
+    marker("HII_GRAPH_SPEECH_SHORT_CLIP_TIMEOUT_FLOOR=PASS");
     if (play_us > 30000000ull) {
         speech_dma_stop();
         return 0;
@@ -1173,6 +1214,7 @@ static int speech_dma_poll(u64 elapsed_step_us, u8 *progress_out) {
 
     volatile u8 *sd = speech_stream_descriptor();
     if (!sd) {
+        marker("HII_GRAPH_SPEECH_DMA_FAIL=NO_DESCRIPTOR");
         speech_dma_stop();
         return -1;
     }
@@ -1180,10 +1222,23 @@ static int speech_dma_poll(u64 elapsed_step_us, u8 *progress_out) {
     u32 lpib = *(volatile u32 *)(sd + 0x04);
     if (lpib && progress_out) *progress_out = 1;
     u8 status = sd[3];
-    if (status & 0x04u) {
-        int ok = lpib != 0;
+    if (status & 0x18u) {
+        marker("HII_GRAPH_SPEECH_DMA_FAIL=STREAM_ERROR");
         speech_dma_stop();
-        return ok ? 1 : -1;
+        return -1;
+    }
+    if (status & 0x04u) {
+        if (lpib != 0u) {
+            speech_dma_stop();
+            return 1;
+        }
+        /* A stale BCIS can survive the previous clip/reset on QEMU and some
+           HDA implementations. It is not completion of the new clip when
+           LPIB has never advanced. W1C it and keep polling; the normal timeout
+           remains the fail-safe if DMA really does not start. */
+        sd[3] = 0x04u;
+        fence();
+        marker("HII_GRAPH_SPEECH_STALE_BCIS_CLEARED=PASS");
     }
 
     if (elapsed_step_us > g_speech_timeout_us - g_speech_elapsed_us)
@@ -1191,6 +1246,7 @@ static int speech_dma_poll(u64 elapsed_step_us, u8 *progress_out) {
     else
         g_speech_elapsed_us += elapsed_step_us;
     if (g_speech_elapsed_us >= g_speech_timeout_us) {
+        marker("HII_GRAPH_SPEECH_DMA_FAIL=TIMEOUT");
         speech_dma_stop();
         return -1;
     }
