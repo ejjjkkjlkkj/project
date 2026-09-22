@@ -60,9 +60,11 @@ The BIOS 308 reader now exposes a read-only navigation layer plus a **non-persis
 | V | Speak the live firmware value |
 | W | Where Am I: form + control + value |
 | P | Speak position in the current form |
+| L | Speak control details: limits, size bounds, list capacity, clock storage |
 | R | Reload the current form from live VarStores and preserve focus |
 | F/B/X/C/E (+ uppercase reverse variants) | Structural navigation by form/button/checkbox/choice/editable control |
 | O / Shift+O | Preview next / previous OneOf value in RAM |
+| + / - | Preview the next / previous numeric value using the IFR step and limits |
 | Space | Preview checkbox toggle in RAM |
 | M | Speak the number of pending preview edits |
 | Z | Discard the preview edit for the current control |
@@ -74,3 +76,12 @@ The BIOS 308 reader now exposes a read-only navigation layer plus a **non-persis
 Preview edits never call `SetVariable`, `RouteConfig`, or a vendor callback. They are stored only in the reader's RAM, announced as **preview**, and disappear when discarded or when the EFI application exits. Controls that are `GrayOutIf`-disabled or have unresolved conditional state cannot be activated or staged.
 
 This gives the navigation layer a complete edit interaction model without risking Secure Boot, TPM, boot-order, password, or platform settings before the firmware-native commit path is validated.
+
+
+### Specialized HII semantics
+
+The reader now preserves metadata for `OneOf`, `Numeric`, `String`, `Password`, `OrderedList`, `Date`, and `Time` opcodes. Numeric limits and step values, string size limits, ordered-list capacity, and date/time storage class can be spoken with `L`.
+
+Password questions have a hard privacy rule: the reader announces **protected** and does not attempt to read the underlying VarStore value for speech. Preview changes are still RAM-only. When a staged choice, checkbox, or numeric control affects a `SuppressIf`, `GrayOutIf`, or `DisableIf` expression, `R` and the automatic post-edit refresh evaluate the dependency using the staged value so the previewed form structure matches the proposed setting without writing firmware.
+
+Question-header flags are also semantic: `READ_ONLY`, `CALLBACK`, `RESET_REQUIRED`, `RECONNECT_REQUIRED`, and `OPTIONS_ONLY` are tracked. Read-only questions cannot be staged; callback/reset/reconnect requirements are exposed through control details so a future commit transaction cannot silently bypass firmware behavior.
