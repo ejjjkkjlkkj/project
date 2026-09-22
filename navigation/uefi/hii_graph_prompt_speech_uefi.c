@@ -1685,6 +1685,7 @@ static int nav_find_form(int direction, u8 *index_out) {
     return 0;
 }
 static int nav_load_form(void *system_table, u16 requested_form_id);
+static void nav_prompt_load(u8 index);
 
 static int nav_find_question_index(u16 question_id, u8 *index_out) {
     if (!question_id || !index_out) return 0;
