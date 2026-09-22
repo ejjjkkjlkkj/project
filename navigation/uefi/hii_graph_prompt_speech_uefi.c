@@ -1057,9 +1057,6 @@ static u16 rd16(const u8 *p) {
 static u32 rd32(const u8 *p) {
     return (u32)p[0] | ((u32)p[1] << 8) | ((u32)p[2] << 16) | ((u32)p[3] << 24);
 }
-static u64 rd64(const u8 *p) {
-    return (u64)rd32(p) | ((u64)rd32(p + 4) << 32);
-}
 static int prompt_opcode(u8 op) {
     switch (op) {
         case 0x02: case 0x03: case 0x05: case 0x06: case 0x07:
