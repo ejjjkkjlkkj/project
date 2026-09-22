@@ -14,6 +14,8 @@ sr_command sr_key_to_command(sr_key key) {
         case 0x0006u: return SR_CMD_LAST;          /* End */
         case 0x0009u: return SR_CMD_PAGE_PREVIOUS; /* Page Up */
         case 0x000au: return SR_CMD_PAGE_NEXT;     /* Page Down */
+        case 0x0012u: return SR_CMD_ITEM_CHOOSER;  /* F8 */
+        case 0x0017u: return SR_CMD_STOP_SPEECH;   /* Escape */
         default: break;
     }
 
