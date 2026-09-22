@@ -1621,6 +1621,38 @@ static int nav_find_form(int direction, u8 *index_out) {
     }
     return 0;
 }
+static int nav_find_question_index(u16 question_id, u8 *index_out) {
+    if (!question_id || !index_out) return 0;
+    for (u8 i = 0u; i < g_nav_prompt_total; ++i) {
+        if (g_nav_prompt_question_ids[i] == question_id) {
+            *index_out = i;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static int nav_refresh_current_form(void *system_table) {
+    if (!system_table || !g_nav_current_form_id) return 0;
+    u16 form_id = g_nav_current_form_id;
+    u16 question_id = g_nav_prompt_question_ids[g_nav_prompt_index];
+    u8 old_index = g_nav_prompt_index;
+    if (!nav_load_form(system_table, form_id)) return 0;
+
+    u8 restored = 0u;
+    if (question_id && nav_find_question_index(question_id, &restored)) {
+        nav_prompt_load(restored);
+        marker("HII_GRAPH_NAV_REFRESH_FOCUS_RESTORED=PASS");
+    } else {
+        if (old_index >= g_nav_prompt_total)
+            old_index = (u8)(g_nav_prompt_total - 1u);
+        nav_prompt_load(old_index);
+        marker("HII_GRAPH_NAV_REFRESH_FOCUS_FALLBACK=PASS");
+    }
+    marker("HII_GRAPH_NAV_LIVE_REFRESH=PASS");
+    return 1;
+}
+
 #endif
 static u16 fold_prompt_char(u16 ch) {
     if (ch >= (u16)'A' && ch <= (u16)'Z') return (u16)(ch + 32u);
@@ -2743,6 +2775,10 @@ static int wait_navigation_keys(void *system_table) {
             } else if (key.unicode_char == (u16)'r' || key.unicode_char == (u16)'R') {
                 marker("HII_GRAPH_NAV_KEY=R");
                 g_nav_event_mask |= NAV_SEEN_R;
+                if (g_nav_m1603qa_308_profile) {
+                    speech_dma_stop();
+                    if (!nav_refresh_current_form(system_table)) return 0;
+                }
                 speak = 1;
             } else if (key.scan_code == 0x0001u) {
                 marker("HII_GRAPH_NAV_KEY=UP");
