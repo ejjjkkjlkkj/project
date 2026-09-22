@@ -61,6 +61,48 @@ DIGIT_UNITS={
 # still fall back to deterministic French letter-name spelling.
 WORD_UNITS={
  'advanced':('a','d','v','a','n','s','t'),
+ 'access':('a','k','s','e','s'),
+ 'action':('a','k','sh','on'),
+ 'asus':('a','s','u','s'),
+ 'back':('b','a','k'),
+ 'bios':('b','i','o','s'),
+ 'button':('b','a','t','on'),
+ 'change':('sh','e','n','zh'),
+ 'checked':('sh','e','k','t'),
+ 'choice':('sh','o','i','s'),
+ 'conditional':('k','on','d','i','sh','on','a','l'),
+ 'cpu':('s','e','p','e','u'),
+ 'details':('d','i','t','e','l','s'),
+ 'down':('d','a','w','n'),
+ 'editable':('e','d','i','t','a','b','l'),
+ 'edits':('e','d','i','t','s'),
+ 'enter':('e','n','t','e','r'),
+ 'escape':('e','s','k','e','p'),
+ 'firmware':('f','e','r','m','w','e','r'),
+ 'flash':('f','l','a','sh'),
+ 'for':('f','o','r'),
+ 'help':('e','l','p'),
+ 'left':('l','e','f','t'),
+ 'main':('m','e','n'),
+ 'move':('m','u','v'),
+ 'no':('n','o'),
+ 'not':('n','o','t'),
+ 'nvme':('e','n','v','e','e','m','e'),
+ 'only':('o','n','l','i'),
+ 'pending':('p','e','n','d','i','n','g'),
+ 'position':('p','o','z','i','s','i','on'),
+ 'press':('p','r','e','s'),
+ 'preview':('p','r','i','v','i','u'),
+ 'ready':('r','e','d','i'),
+ 'right':('r','i','t'),
+ 'sata':('s','a','t','a'),
+ 'setup':('s','e','t','u','p'),
+ 'smart':('s','m','a','r','t'),
+ 'stack':('s','t','a','k'),
+ 'tpm':('t','e','p','e','e','m'),
+ 'up':('a','p'),
+ 'usb':('u','e','s','b','e'),
+ 'value':('v','a','l','u'),
  'administrator':('a','d','m','i','n','i','s','t','r','a','t','o','r'),
  'boot':('b','u','t'),
  'changes':('sh','e','n','zh','e','s'),
@@ -144,6 +186,8 @@ def main():
         raise SystemExit('usage: generate_units.py OUTPUT_C METADATA')
     out=Path(sys.argv[1]); meta=Path(sys.argv[2])
     speech=load_source()
+    if speech.SAMPLE_RATE < 16000:
+        raise SystemExit(f'UEFI speech source rate too low for intelligibility: {speech.SAMPLE_RATE}')
     names=sorted(
         {'sil'}
         | {u for seq in LETTER_UNITS.values() for u in seq}
@@ -226,9 +270,11 @@ def main():
         f'word-lexicon-count={len(word_names)}\n'
         f'word-name-stride={WORD_NAME_STRIDE}\n'
         f'word-unit-stride={WORD_UNIT_STRIDE}\n'
-        'inter-letter-silence-ms=12-runtime-gap\n'
-        'word-silence-ms=65\n'
-        'speech-mode=hybrid-word-allophone-fr-v4\n'
+        'source-sample-rate-hz='+str(speech.SAMPLE_RATE)+'\n'
+        'inter-letter-silence-ms=18-runtime-gap\n'
+        'intra-word-phoneme-silence-ms=0\n'
+        'word-silence-ms=70\n'
+        'speech-mode=hybrid-word-formant-fr-v5\n'
         'full-utterance-asset=false\n'
     )
     print('HII_GRAPH_PROMPT_UNIT_GENERATION=PASS')

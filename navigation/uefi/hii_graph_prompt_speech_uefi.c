@@ -996,8 +996,8 @@ static int speech_dma_begin(const char *text, u32 text_count) {
      * 48 kHz signed-16 stereo frames (192 bytes/ms).
      */
     const u32 lead_silence_bytes = 30u * 192u;
-    const u32 grapheme_gap_bytes = 12u * 192u;
-    const u32 phoneme_gap_bytes = 3u * 192u;
+    const u32 grapheme_gap_bytes = 18u * 192u;
+    const u32 phoneme_gap_bytes = 0u;
     const u32 tail_silence_bytes = 45u * 192u;
     u32 total_bytes = lead_silence_bytes;
     if (total_bytes > dma_bytes - pcm_off) return 0;
@@ -1092,6 +1092,7 @@ static int speech_dma_begin(const char *text, u32 text_count) {
     for (u32 i = 0; i < tail_silence_bytes; ++i) pcm[total_bytes + i] = 0;
     total_bytes += tail_silence_bytes;
     marker("HII_GRAPH_SPEECH_PACING=PASS");
+    marker("HII_GRAPH_SPEECH_CONTINUOUS_PHONEMES=PASS");
     marker("HII_GRAPH_SPEECH_DIGITS=PASS");
     marker("HII_GRAPH_SPEECH_HYBRID_WORD_MODE=PASS");
     marker("HII_GRAPH_SPEECH_UNKNOWN_WORD_FALLBACK=PASS");

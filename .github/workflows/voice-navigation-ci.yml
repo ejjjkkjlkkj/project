@@ -42,7 +42,7 @@ jobs:
           (cd navigation/uefi && python test_m1603qa_308_baseline.py)
           python navigation/uefi/generate_units.py build/navigation_units.c build/navigation_units.txt
           grep -F 'source=voice/uefi_units/build_native_units.py' build/navigation_units.txt
-          grep -F 'speech-mode=hybrid-word-allophone-fr-v4' build/navigation_units.txt
+          grep -F 'speech-mode=hybrid-word-formant-fr-v5' build/navigation_units.txt
           grep -F 'word-lexicon-count=' build/navigation_units.txt
           grep -F 'letter-map=a-z-french-letter-names' build/navigation_units.txt
           grep -F 'digit-map=0-9-french-number-names' build/navigation_units.txt
