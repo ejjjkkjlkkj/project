@@ -901,6 +901,36 @@ static void sink_stop(void *ctx) {
     sr_hda_audio_stop((sr_hda_audio *)ctx);
 }
 
+int sr_hda_audio_static_selftest(void) {
+    sr_u8 dac = 0;
+    sr_u8 selectors = 0;
+
+    clear_graph();
+    g_type[0x14u] = HDA_WIDGET_PIN;
+    g_type[0x0cu] = HDA_WIDGET_MIXER;
+    g_type[0x0bu] = HDA_WIDGET_SELECTOR;
+    g_type[0x02u] = HDA_WIDGET_AUDIO_OUTPUT;
+    g_type[0x03u] = HDA_INVALID_NID;
+
+    g_conn_count[0x14u] = 1u;
+    g_conn[0x14u][0] = 0x0cu;
+    g_conn_count[0x0cu] = 1u;
+    g_conn[0x0cu][0] = 0x0bu;
+    g_conn_count[0x0bu] = 2u;
+    g_conn[0x0bu][0] = 0x03u;
+    g_conn[0x0bu][1] = 0x02u;
+
+    if (!find_route(0x14u, &dac, &selectors)) return 0;
+    if (dac != 0x02u || selectors != 1u || g_depth[dac] != 3u)
+        return 0;
+    if (g_route_index[dac] != 1u) return 0;
+    if (encode_verb12(2u, 0x14u, 0x701u, 3u) != 0x21470103u)
+        return 0;
+    if (encode_verb4(2u, 0x02u, 0x2u, 0x0011u) != 0x20220011u)
+        return 0;
+    return 1;
+}
+
 int sr_hda_audio_init(sr_hda_audio *audio, void *system_table) {
     void *bs;
     sr_u8 pin = 0;
