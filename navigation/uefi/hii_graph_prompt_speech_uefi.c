@@ -214,6 +214,8 @@ static char g_nav_help_text[33];
 static u8 g_nav_help_length;
 static char g_nav_value_text[33];
 static u8 g_nav_value_length;
+static char g_nav_focus_value_text[33];
+static u8 g_nav_focus_value_length;
 static u8 g_nav_help_available;
 static u16 g_nav_current_form_id;
 static char g_nav_form_title[33];
@@ -1300,6 +1302,56 @@ static int nav_read_scalar_value(void *system_table, u8 prompt_index,
         value |= ((u64)g_nav_var_data[(u32)var_info + i]) << (8u * i);
     *value_out = value;
     return 1;
+}
+
+static int nav_build_focus_value_speech(void *system_table, u8 prompt_index,
+                                        char *out, u8 *length_out) {
+    if (!system_table || !out || !length_out ||
+        prompt_index >= g_nav_prompt_total) return 0;
+
+    u64 live_value = 0u;
+    if (!nav_read_scalar_value(system_table, prompt_index, &live_value)) return 0;
+
+    const char *suffix = 0;
+    u8 suffix_len = 0u;
+    char numeric[33];
+    u8 numeric_len = 0u;
+    u8 opcode = g_nav_prompt_opcodes[prompt_index];
+
+    if (opcode == 0x05u &&
+        nav_option_for_value(prompt_index, live_value, &suffix, &suffix_len)) {
+        /* One-of: use the firmware's own HII option label. */
+    } else if (opcode == 0x06u) {
+        suffix = live_value ? "checked" : "not checked";
+        suffix_len = live_value ? 7u : 11u;
+    } else if (opcode == 0x07u &&
+               nav_format_u64(live_value, numeric, &numeric_len)) {
+        suffix = numeric;
+        suffix_len = numeric_len;
+    } else {
+        return 0;
+    }
+
+    if (!suffix || !suffix_len) return 0;
+    if (suffix_len >= 32u) {
+        for (u8 i = 0u; i < 32u; ++i) out[i] = suffix[i];
+        out[32] = 0;
+        *length_out = 32u;
+        return 1;
+    }
+
+    u8 prefix_budget = (u8)(32u - suffix_len - 1u);
+    u8 n = 0u;
+    const char *role = ifr_semantic_role(opcode);
+    while (*role && n < prefix_budget) out[n++] = *role++;
+    if (n < prefix_budget && g_nav_prompt_lengths[prompt_index]) out[n++] = ' ';
+    for (u8 j = 0u; j < g_nav_prompt_lengths[prompt_index] && n < prefix_budget; ++j)
+        out[n++] = g_nav_prompts[prompt_index][j];
+    if (n && n < 32u) out[n++] = ' ';
+    for (u8 j = 0u; j < suffix_len && n < 32u; ++j) out[n++] = suffix[j];
+    out[n] = 0;
+    *length_out = n;
+    return n != 0u;
 }
 
 /*
@@ -2467,6 +2519,14 @@ static int wait_navigation_keys(void *system_table) {
             if (speak) {
                 const char *speech_text = speech_override ? speech_override : g_nav_speech_text;
                 u8 speech_length = speech_override ? speech_override_length : g_nav_speech_length;
+                if (!speech_override && !speak_help &&
+                    nav_build_focus_value_speech(system_table, g_nav_prompt_index,
+                                                 g_nav_focus_value_text,
+                                                 &g_nav_focus_value_length)) {
+                    speech_text = g_nav_focus_value_text;
+                    speech_length = g_nav_focus_value_length;
+                    marker("HII_GRAPH_NAV_FOCUS_VALUE_SPEECH=PASS");
+                }
                 if (speak_help) {
                     if (g_nav_help_length) {
                         speech_text = g_nav_help_text;
@@ -2630,7 +2690,16 @@ __attribute__((ms_abi)) u64 efi_main(void *image_handle, void *system_table) {
     marker("BDL_RUNTIME_TEXT_SCHEDULE=PASS");
 
 #ifdef QEV_INTERACTIVE_NAV
-    if (!run_speech_dma(g_nav_speech_text, g_nav_speech_length)) {
+    const char *initial_speech = g_nav_speech_text;
+    u8 initial_speech_length = g_nav_speech_length;
+    if (nav_build_focus_value_speech(system_table, g_nav_prompt_index,
+                                     g_nav_focus_value_text,
+                                     &g_nav_focus_value_length)) {
+        initial_speech = g_nav_focus_value_text;
+        initial_speech_length = g_nav_focus_value_length;
+        marker("HII_GRAPH_NAV_INITIAL_VALUE_SPEECH=PASS");
+    }
+    if (!run_speech_dma(initial_speech, initial_speech_length)) {
 #else
     if (!run_speech_dma(g_prompt_text, g_prompt_count)) {
 #endif
@@ -2643,7 +2712,7 @@ __attribute__((ms_abi)) u64 efi_main(void *image_handle, void *system_table) {
     marker("LPIB_PROGRESS=PASS");
     marker("HII_GRAPH_NAV_REALTIME_CAPABLE=PASS");
 #ifdef QEV_INTERACTIVE_NAV
-    marker("HII_GRAPH_NAV_SEMANTIC_SPEECH=ROLE_PLUS_LABEL");
+    marker("HII_GRAPH_NAV_SEMANTIC_SPEECH=ROLE_LABEL_VALUE");
 #endif
     if (g_controller_preferred && g_codec_vendor_id == 0x10ec0256u) {
         marker("PHYSICAL_ASUS_M1603QA_HDA_RUNTIME=PASS");
