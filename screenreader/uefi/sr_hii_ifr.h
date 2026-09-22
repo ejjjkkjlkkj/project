@@ -16,6 +16,15 @@ typedef struct {
 } sr_hii_option;
 
 typedef struct {
+    sr_u8 guid[16];
+    const char *name;
+    sr_u16 id;
+    sr_u16 size;
+    sr_u32 attributes;
+    sr_u8 opcode;
+} sr_hii_varstore;
+
+typedef struct {
     sr_u16 question_id;
     sr_u16 varstore_id;
     sr_u16 varstore_info;
@@ -40,6 +49,9 @@ typedef struct {
     sr_hii_option *options;
     sr_u32 option_capacity;
     sr_u32 option_count;
+    sr_hii_varstore *varstores;
+    sr_u32 varstore_capacity;
+    sr_u32 varstore_count;
     sr_u32 malformed_opcodes;
     sr_u32 dropped_nodes;
 } sr_hii_model;
@@ -61,6 +73,13 @@ void sr_hii_model_attach_metadata(sr_hii_model *model,
                                   sr_u32 binding_capacity,
                                   sr_hii_option *options,
                                   sr_u32 option_capacity);
+
+void sr_hii_model_attach_varstores(sr_hii_model *model,
+                                   sr_hii_varstore *varstores,
+                                   sr_u32 varstore_capacity);
+
+const sr_hii_varstore *sr_hii_find_varstore(const sr_hii_model *model,
+                                             sr_u16 varstore_id);
 
 int sr_hii_parse_forms_package(sr_hii_model *model,
                                const sr_u8 *package,
