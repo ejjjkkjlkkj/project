@@ -207,6 +207,7 @@ def load_source():
     if spec is None or spec.loader is None:
         raise SystemExit('cannot load native speech source')
     module=importlib.util.module_from_spec(spec)
+    sys.modules[spec.name]=module
     spec.loader.exec_module(module)
     return module
 
