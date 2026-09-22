@@ -44,6 +44,14 @@ jobs:
           ./sr-hii-selftest | tee hii-proof.txt
           grep -F 'UEFI_HII_IFR_MODEL=PASS' hii-proof.txt
 
+      - name: Host HII Config Routing self-test
+        working-directory: screenreader/uefi
+        run: |
+          set -euo pipefail
+          cc -std=c11 -O2 -Wall -Wextra -Werror             sr_hii_ifr.c sr_uefi_config.c sr_uefi_config_selftest.c             -o sr-uefi-config-selftest
+          ./sr-uefi-config-selftest | tee uefi-config-proof.txt
+          grep -F 'UEFI_CONFIG_ROUTING=PASS' uefi-config-proof.txt
+
       - name: Host HII semantic value self-test
         working-directory: screenreader/uefi
         run: |
@@ -86,6 +94,7 @@ jobs:
           clang $flags -c sr_voice_stream.c -o sr_voice_stream.obj
           clang $flags -c sr_hii_ifr.c -o sr_hii_ifr.obj
           clang $flags -c sr_uefi_hii.c -o sr_uefi_hii.obj
+          clang $flags -c sr_uefi_config.c -o sr_uefi_config.obj
           clang $flags -c sr_uefi_input.c -o sr_uefi_input.obj
           clang $flags -c sr_chooser.c -o sr_chooser.obj
           clang $flags -c sr_uefi_runtime.c -o sr_uefi_runtime.obj
@@ -93,6 +102,7 @@ jobs:
           test -s sr_voice_stream.obj
           test -s sr_hii_ifr.obj
           test -s sr_uefi_hii.obj
+          test -s sr_uefi_config.obj
           test -s sr_uefi_input.obj
           test -s sr_chooser.obj
           test -s sr_uefi_runtime.obj
