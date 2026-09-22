@@ -55,6 +55,56 @@ DIGIT_UNITS={
  '9':('n','eu','f'),
 }
 
+# Compact semantic pronunciation lexicon for recurring firmware words. These
+# entries reuse the same first-party allophone bank, so they add negligible
+# runtime footprint compared with pre-rendered whole-word PCM. Unknown words
+# still fall back to deterministic French letter-name spelling.
+WORD_UNITS={
+ 'advanced':('a','d','v','a','n','s','t'),
+ 'administrator':('a','d','m','i','n','i','s','t','r','a','t','o','r'),
+ 'boot':('b','u','t'),
+ 'changes':('sh','e','n','zh','e','s'),
+ 'configuration':('k','on','f','i','g','u','r','a','s','i','on'),
+ 'control':('k','on','t','r','o','l'),
+ 'default':('d','e','f','o','l','t'),
+ 'delete':('d','i','l','i','t'),
+ 'device':('d','i','v','a','i','s'),
+ 'disabled':('d','i','s','e','b','l','d'),
+ 'discard':('d','i','s','k','a','r','d'),
+ 'enabled':('e','n','e','b','l','d'),
+ 'exit':('e','k','s','i','t'),
+ 'fast':('f','a','s','t'),
+ 'information':('i','n','f','o','r','m','a','s','i','on'),
+ 'interface':('i','n','t','e','r','f','e','s'),
+ 'internal':('i','n','t','e','r','n','a','l'),
+ 'management':('m','a','n','a','zh','m','e','n','t'),
+ 'memory':('m','e','m','o','r','i'),
+ 'mode':('m','o','d'),
+ 'network':('n','e','t','w','o','r','k'),
+ 'open':('o','p','e','n'),
+ 'option':('o','p','s','i','on'),
+ 'password':('p','a','s','w','o','r','d'),
+ 'priority':('p','r','i','o','r','i','t','i'),
+ 'processor':('p','r','o','s','e','s','o','r'),
+ 'recovery':('r','i','k','a','v','e','r','i'),
+ 'restore':('r','e','s','t','o','r'),
+ 'save':('s','e','v'),
+ 'secure':('s','e','k','u','r'),
+ 'security':('s','i','k','u','r','i','t','i'),
+ 'settings':('s','e','t','i','n','g','s'),
+ 'storage':('s','t','o','r','a','zh'),
+ 'support':('s','u','p','o','r','t'),
+ 'system':('s','i','s','t','e','m'),
+ 'trusted':('t','r','u','s','t','e','d'),
+ 'user':('u','z','e','r'),
+ 'utility':('u','t','i','l','i','t','i'),
+ 'version':('v','e','r','zh','on'),
+ 'wake':('w','e','k'),
+}
+
+WORD_NAME_STRIDE=16
+WORD_UNIT_STRIDE=24
+
 def load_source():
     spec=importlib.util.spec_from_file_location('qevarynx_native_speech_source',SOURCE)
     if spec is None or spec.loader is None:
@@ -98,6 +148,7 @@ def main():
         {'sil'}
         | {u for seq in LETTER_UNITS.values() for u in seq}
         | {u for seq in DIGIT_UNITS.values() for u in seq}
+        | {u for seq in WORD_UNITS.values() for u in seq}
     )
     source_units=speech.make_units()
     converted={n:convert(source_units[n], speech.SAMPLE_RATE) for n in names}
@@ -122,6 +173,23 @@ def main():
         digit_counts.append(len(seq))
         row=[index[u] for u in seq] + [0]*(8-len(seq))
         digit_flat.extend(row)
+
+    word_names=sorted(WORD_UNITS)
+    word_name_lens=[]; word_name_flat=[]
+    word_unit_counts=[]; word_unit_flat=[]
+    for word in word_names:
+        encoded=word.encode('ascii')
+        seq=WORD_UNITS[word]
+        if len(encoded)>=WORD_NAME_STRIDE:
+            raise SystemExit(f'word name too long: {word}')
+        if len(seq)>WORD_UNIT_STRIDE:
+            raise SystemExit(f'word unit fanout too large: {word}')
+        word_name_lens.append(len(encoded))
+        word_name_flat.extend(encoded)
+        word_name_flat.extend([0]*(WORD_NAME_STRIDE-len(encoded)))
+        word_unit_counts.append(len(seq))
+        word_unit_flat.extend(index[u] for u in seq)
+        word_unit_flat.extend([0]*(WORD_UNIT_STRIDE-len(seq)))
     lines=[
         '/* Generated deterministically from first-party native speech units. */',
         arr_u8('qev_unit_bank',list(bank)),
@@ -134,6 +202,13 @@ def main():
         arr_u8('qev_letter_units',flat),
         arr_u8('qev_digit_unit_count',digit_counts),
         arr_u8('qev_digit_units',digit_flat),
+        f'const unsigned int qev_word_count = {len(word_names)}u;\n',
+        f'const unsigned int qev_word_name_stride = {WORD_NAME_STRIDE}u;\n',
+        f'const unsigned int qev_word_unit_stride = {WORD_UNIT_STRIDE}u;\n',
+        arr_u8('qev_word_name_len',word_name_lens),
+        arr_u8('qev_word_names',word_name_flat),
+        arr_u8('qev_word_unit_count',word_unit_counts),
+        arr_u8('qev_word_units',word_unit_flat),
     ]
     out.write_text('\n'.join(lines))
     meta.write_text(
@@ -146,16 +221,20 @@ def main():
         f'bank-sha256={hashlib.sha256(bank).hexdigest()}\n'
         'letter-map=a-z-french-letter-names\n'
         'digit-map=0-9-french-number-names\n'
-        'max-input-graphemes=32\n'
+        'max-input-graphemes=64\n'
         'max-units-per-letter=8\n'
+        f'word-lexicon-count={len(word_names)}\n'
+        f'word-name-stride={WORD_NAME_STRIDE}\n'
+        f'word-unit-stride={WORD_UNIT_STRIDE}\n'
         'inter-letter-silence-ms=12-runtime-gap\n'
         'word-silence-ms=65\n'
-        'speech-mode=clear-lettername-spelling-fr-v3\n'
+        'speech-mode=hybrid-word-allophone-fr-v4\n'
         'full-utterance-asset=false\n'
     )
     print('HII_GRAPH_PROMPT_UNIT_GENERATION=PASS')
     print('UNIT_COUNT='+str(len(names)))
     print('BANK_BYTES='+str(len(bank)))
+    print('WORD_LEXICON_COUNT='+str(len(word_names)))
 
 if __name__=='__main__':
     main()

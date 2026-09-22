@@ -42,7 +42,8 @@ jobs:
           (cd navigation/uefi && python test_m1603qa_308_baseline.py)
           python navigation/uefi/generate_units.py build/navigation_units.c build/navigation_units.txt
           grep -F 'source=voice/uefi_units/build_native_units.py' build/navigation_units.txt
-          grep -F 'speech-mode=clear-lettername-spelling-fr-v3' build/navigation_units.txt
+          grep -F 'speech-mode=hybrid-word-allophone-fr-v4' build/navigation_units.txt
+          grep -F 'word-lexicon-count=' build/navigation_units.txt
           grep -F 'letter-map=a-z-french-letter-names' build/navigation_units.txt
           grep -F 'digit-map=0-9-french-number-names' build/navigation_units.txt
 
@@ -59,6 +60,10 @@ jobs:
           grep -aF 'HII_GRAPH_NAV_REALTIME_MODE=INTERRUPTIBLE_DMA' build/NAVIGATION.EFI
           grep -aF 'HII_GRAPH_SPEECH_QUEUE=INTERRUPTIBLE_64' build/NAVIGATION.EFI
           grep -aF 'HII_GRAPH_SPEECH_WORD_BOUNDARY_CHUNKING=PASS' build/NAVIGATION.EFI
+          grep -aF 'HII_GRAPH_SPEECH_HYBRID_WORD_MODE=PASS' build/NAVIGATION.EFI
+          grep -aF 'HII_GRAPH_SPEECH_WORD_PRONUNCIATION=PASS' build/NAVIGATION.EFI
+          grep -aF 'HII_GRAPH_SPEECH_WORD_FALLBACK=LETTER_NAMES' build/NAVIGATION.EFI
+          grep -aF 'HII_GRAPH_SPEECH_UNKNOWN_WORD_FALLBACK=PASS' build/NAVIGATION.EFI
           grep -aF 'HII_GRAPH_SPEECH_MULTI_CHUNK=PASS' build/NAVIGATION.EFI
           grep -aF 'HII_GRAPH_SPEECH_CHUNK_START=PASS' build/NAVIGATION.EFI
           grep -aF 'HII_GRAPH_SPEECH_CHUNK_CONTINUE=PASS' build/NAVIGATION.EFI
