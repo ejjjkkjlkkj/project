@@ -42,8 +42,9 @@ jobs:
           (cd navigation/uefi && python test_m1603qa_308_baseline.py)
           python navigation/uefi/generate_units.py build/navigation_units.c build/navigation_units.txt
           grep -F 'source=voice/v4/native_speech_v4.py' build/navigation_units.txt
-          grep -F 'speech-mode=whole-clip-voicecore-v4-uefi-v6' build/navigation_units.txt
+          grep -F 'speech-mode=whole-phrase-voicecore-v4-uefi-v7' build/navigation_units.txt
           grep -F 'word-lexicon-count=' build/navigation_units.txt
+          grep -F 'phrase-clip-count=' build/navigation_units.txt
           grep -F 'letter-map=a-z-french-letter-names' build/navigation_units.txt
           grep -F 'digit-map=0-9-french-number-names' build/navigation_units.txt
 
@@ -76,6 +77,8 @@ jobs:
           grep -aF 'HII_GRAPH_SPEECH_CHUNK_START=PASS' build/NAVIGATION.EFI
           grep -aF 'HII_GRAPH_SPEECH_CHUNK_CONTINUE=PASS' build/NAVIGATION.EFI
           grep -aF 'HII_GRAPH_SPEECH_PHRASE_COMPLETE=PASS' build/NAVIGATION.EFI
+          grep -aF 'HII_GRAPH_SPEECH_WHOLE_PHRASE_CLIP=PASS' build/NAVIGATION.EFI
+          grep -aF 'HII_GRAPH_SPEECH_PHRASE_FIRST_MODE=PASS' build/NAVIGATION.EFI
           grep -aF 'HII_GRAPH_NAV_REALTIME_FOCUS_SPEECH=PASS' build/NAVIGATION.EFI
           grep -aF 'HII_GRAPH_NAV_SEMANTIC_ROLE=PASS' build/NAVIGATION.EFI
           grep -aF 'HII_GRAPH_NAV_CONTEXT_HELP_SPEECH=PASS' build/NAVIGATION.EFI

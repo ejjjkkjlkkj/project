@@ -157,6 +157,22 @@ LETTER_UNITS = {ch:(f'letter_{ch}',) for ch in PHONEME_LETTER_UNITS}
 DIGIT_UNITS = {ch:(f'digit_{ch}',) for ch in PHONEME_DIGIT_UNITS}
 WORD_UNITS = {word:(f'word_{word}',) for word in PHONEME_WORD_UNITS}
 
+PHRASE_TEXTS = (
+    "ready press f1 for help",
+    "up down move left right change",
+    "enter action escape back f1 help",
+    "no change",
+    "preview edits discarded",
+    "checked",
+    "not checked",
+    "protected",
+)
+PHRASE_NAME_STRIDE=40
+
+def _phrase_unit_name(index):
+    return f'phrase_{index}'
+
+
 _V4_PHONEME = {
     'eu':'ø',
     'on':'ɔ̃',
@@ -197,6 +213,8 @@ def make_source_units(speech):
         units[f'digit_{ch}']=_to_u8_16k(_render_sequence(speech,seq))
     for word,seq in PHONEME_WORD_UNITS.items():
         units[f'word_{word}']=_to_u8_16k(_render_sequence(speech,seq))
+    for index,phrase in enumerate(PHRASE_TEXTS):
+        units[_phrase_unit_name(index)]=_to_u8_16k(speech.synthesize(phrase, 'screen'))
     return units
 
 WORD_NAME_STRIDE=16
@@ -249,6 +267,7 @@ def main():
         | {u for seq in LETTER_UNITS.values() for u in seq}
         | {u for seq in DIGIT_UNITS.values() for u in seq}
         | {u for seq in WORD_UNITS.values() for u in seq}
+        | {_phrase_unit_name(i) for i in range(len(PHRASE_TEXTS))}
     )
     source_units=make_source_units(speech)
     # Keep compact 16 kHz u8 clips in the EFI image. The firmware expands
@@ -292,6 +311,16 @@ def main():
         word_unit_counts.append(len(seq))
         word_unit_flat.extend(index[u] for u in seq)
         word_unit_flat.extend([0]*(WORD_UNIT_STRIDE-len(seq)))
+
+    phrase_name_lens=[]; phrase_name_flat=[]; phrase_unit_indices=[]
+    for pi,phrase in enumerate(PHRASE_TEXTS):
+        encoded=phrase.encode('ascii')
+        if len(encoded)>=PHRASE_NAME_STRIDE:
+            raise SystemExit(f'phrase name too long: {phrase}')
+        phrase_name_lens.append(len(encoded))
+        phrase_name_flat.extend(encoded)
+        phrase_name_flat.extend([0]*(PHRASE_NAME_STRIDE-len(encoded)))
+        phrase_unit_indices.append(index[_phrase_unit_name(pi)])
     lines=[
         '/* Generated deterministically from first-party native speech units. */',
         arr_u8('qev_unit_bank',list(bank)),
@@ -312,6 +341,11 @@ def main():
         arr_u8('qev_word_names',word_name_flat),
         arr_u8('qev_word_unit_count',word_unit_counts),
         arr_u8('qev_word_units',word_unit_flat),
+        f'const unsigned int qev_phrase_count = {len(PHRASE_TEXTS)}u;\n',
+        f'const unsigned int qev_phrase_name_stride = {PHRASE_NAME_STRIDE}u;\n',
+        arr_u8('qev_phrase_name_len',phrase_name_lens),
+        arr_u8('qev_phrase_names',phrase_name_flat),
+        arr_u32('qev_phrase_unit_index',phrase_unit_indices),
     ]
     out.write_text('\n'.join(lines))
     meta.write_text(
@@ -329,17 +363,19 @@ def main():
         f'word-lexicon-count={len(word_names)}\n'
         f'word-name-stride={WORD_NAME_STRIDE}\n'
         f'word-unit-stride={WORD_UNIT_STRIDE}\n'
+        f'phrase-clip-count={len(PHRASE_TEXTS)}\n'
         'source-sample-rate-hz='+str(SOURCE_RATE)+'\n'
         'inter-letter-silence-ms=18-runtime-gap\n'
         'intra-word-phoneme-silence-ms=0\n'
         'word-silence-ms=70\n'
-        'speech-mode=whole-clip-voicecore-v4-uefi-v6\n'
+        'speech-mode=whole-phrase-voicecore-v4-uefi-v7\n'
         'full-utterance-asset=false\n'
     )
     print('HII_GRAPH_PROMPT_UNIT_GENERATION=PASS')
     print('UNIT_COUNT='+str(len(names)))
     print('BANK_BYTES='+str(len(bank)))
     print('WORD_LEXICON_COUNT='+str(len(word_names)))
+    print('PHRASE_CLIP_COUNT='+str(len(PHRASE_TEXTS)))
 
 if __name__=='__main__':
     main()
