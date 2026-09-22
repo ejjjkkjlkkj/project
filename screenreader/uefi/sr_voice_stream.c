@@ -279,7 +279,11 @@ int sr_voice_stream_pump(sr_voice_stream *voice, sr_u32 frame_budget) {
 
 void sr_voice_stream_cancel(sr_voice_stream *voice) {
     if (!voice) return;
-    if (voice->active && voice->audio.stop)
+    /*
+     * The sink may still be playing a DMA buffer after text staging finished.
+     * Always issue stop so a new focus event can interrupt physical audio.
+     */
+    if (voice->audio.stop)
         voice->audio.stop(voice->audio.ctx);
     voice->active = 0;
     voice->current = 0;
