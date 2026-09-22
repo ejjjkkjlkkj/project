@@ -26,6 +26,14 @@ required = (
     'grapheme_gap_bytes = 18u * 192u',
     'HII_GRAPH_SPEECH_CONTINUOUS_PHONEMES=PASS',
     'HII_GRAPH_SPEECH_WHOLE_CLIP_VOICECORE=PASS',
+    'HII_GRAPH_SPEECH_WHOLE_PHRASE_CLIP=PASS',
+    'HII_GRAPH_SPEECH_PHRASE_FIRST_MODE=PASS',
+    'speech_lookup_phrase',
+    'qev_phrase_count',
+    'qev_phrase_name_stride',
+    'qev_phrase_name_len',
+    'qev_phrase_names',
+    'qev_phrase_unit_index',
     'append_unit_pcm',
     'qev_unit_source_rate',
     'HII_GRAPH_SPEECH_MULTI_CHUNK=PASS',
@@ -361,7 +369,9 @@ assert "speech_phrase_begin" in run and "speech_phrase_poll" in run
 sd_start = text.index("static int speech_dma_begin")
 sd_end = text.index("static int speech_dma_poll", sd_start)
 sd = text[sd_start:sd_end]
+assert "speech_lookup_phrase(text, text_count" in sd
 assert "speech_lookup_word(text + i, word_length" in sd
+assert sd.index("speech_lookup_phrase(text, text_count") < sd.index("speech_lookup_word(text + i, word_length")
 assert "(i == 0u || text[i - 1u] == ' ')" in sd
 assert "qev_letter_unit_count" in sd and "qev_digit_unit_count" in sd
 assert sd.index("speech_lookup_word(text + i, word_length") < sd.index("qev_letter_unit_count")
