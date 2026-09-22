@@ -35,7 +35,7 @@ jobs:
           sudo apt-get install -y qemu-system-x86 ovmf clang lld
           qemu-system-x86_64 --version
           qemu-system-x86_64 -audio driver=help || true
-          qemu-system-x86_64 -device help | grep -E 'ich9-intel-hda|hda-duplex' || true
+          qemu-system-x86_64 -device help | grep -E 'ich9-intel-hda|hda-output|qemu-xhci|usb-storage' || true
 
       - name: Build NAVIGATION.EFI
         run: |
@@ -81,7 +81,7 @@ jobs:
           set -euo pipefail
           rm -f build/qemu-serial.log build/qemu-audio.wav build/ovmf-debug.log
           set +e
-          timeout --signal=TERM 45s qemu-system-x86_64             -machine q35,accel=tcg             -m 512M             -smp 1             -nodefaults             -no-reboot             -display none             -monitor none             -serial file:build/qemu-serial.log             -debugcon file:build/ovmf-debug.log             -global isa-debugcon.iobase=0x402             -drive if=pflash,format=raw,readonly=on,file="$OVMF_CODE"             -drive if=pflash,format=raw,file=build/OVMF_VARS.fd             -drive file=build/uefi-floppy.img,format=raw,if=floppy,index=0,readonly=on             -boot order=a             -device ich9-intel-hda             -audiodev wav,id=wav0,path=build/qemu-audio.wav,out.frequency=48000,out.channels=2,out.format=s16             -device hda-duplex,audiodev=wav0
+          timeout --signal=TERM 45s qemu-system-x86_64             -machine q35,accel=tcg             -m 512M             -smp 1             -nodefaults             -no-reboot             -display none             -monitor none             -serial file:build/qemu-serial.log             -debugcon file:build/ovmf-debug.log             -global isa-debugcon.iobase=0x402             -drive if=pflash,format=raw,readonly=on,file="$OVMF_CODE"             -drive if=pflash,format=raw,file=build/OVMF_VARS.fd             -device qemu-xhci,id=xhci             -drive if=none,id=bootstick,format=raw,file=build/uefi-floppy.img,readonly=on             -device usb-storage,bus=xhci.0,drive=bootstick,bootindex=1             -device ich9-intel-hda,id=hda0             -audiodev wav,id=wav0,path=build/qemu-audio.wav,out.frequency=48000,out.channels=2,out.format=s16             -device hda-output,bus=hda0.0,audiodev=wav0
           rc=$?
           set -e
           echo "QEMU_EXIT=$rc"
