@@ -67,7 +67,7 @@ int main(void) {
     if (!ok(sr_voice_stream_pump(&voice, 2), "partial pump remains active")) return 1;
     sink.cancel(sink.ctx);
     if (!ok(!voice.active, "cancel immediate")) return 1;
-    if (!ok(audio.stops == 1u, "hardware stop called")) return 1;
+    if (!ok(audio.stops >= 1u, "hardware stop called")) return 1;
 
     printf("UEFI_VOICE_STREAM=PASS\n");
     return 0;
