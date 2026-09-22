@@ -117,12 +117,20 @@ typedef u64 (*hii_export_fn)(const void *self, void *handle, usize *buffer_size,
 typedef u64 (*hii_get_string_fn)(const void *self, const char *language, void *handle, u16 string_id, u16 *string, usize *string_size, void **font_info);
 typedef u64 (*hii_get_languages_fn)(const void *self, void *handle, char *languages, usize *language_size);
 
+typedef u64 (*hii_get_package_list_handle_fn)(const void *self, void *hii_handle,
+                                                  void **driver_handle);
 typedef struct {
     void *new_package_list;
     void *remove_package_list;
     void *update_package_list;
     hii_list_fn list_package_lists;
     hii_export_fn export_package_lists;
+    void *register_package_notify;
+    void *unregister_package_notify;
+    void *find_keyboard_layouts;
+    void *get_keyboard_layout;
+    void *set_keyboard_layout;
+    hii_get_package_list_handle_fn get_package_list_handle;
 } hii_database_protocol;
 
 typedef struct {
@@ -146,6 +154,10 @@ static const efi_guid g_hii_database_guid =
     {0xef9fc172u,0xa1b2u,0x4693u,{0xb3,0x27,0x6d,0x32,0xfc,0x41,0x60,0x42}};
 static const efi_guid g_hii_string_guid =
     {0x0fd96974u,0x23aau,0x4cdcu,{0xb9,0xcb,0x98,0xd1,0x77,0x50,0x32,0x2a}};
+static const efi_guid g_hii_config_access_guid =
+    {0x330d4706u,0xf2a0u,0x4e4fu,{0xa3,0x69,0xb6,0x6f,0xa8,0xd5,0x43,0x85}};
+static const efi_guid g_hii_config_routing_guid =
+    {0x587e72d7u,0xcc50u,0x4f79u,{0x82,0x09,0xca,0x29,0x1f,0xc1,0xa1,0x0f}};
 static const efi_guid g_loaded_image_guid =
     {0x5b1b31a1u,0x9562u,0x11d2u,{0x8e,0x3f,0x00,0xa0,0xc9,0x69,0x72,0x3b}};
 static const efi_guid g_simple_fs_guid =
@@ -264,6 +276,9 @@ static u16 g_nav_condition_known;
 static u16 g_nav_condition_unknown;
 static u16 g_nav_condition_hidden;
 static u16 g_nav_condition_gray;
+static void *g_nav_config_driver_handle;
+static void *g_nav_config_access;
+static void *g_nav_config_routing;
 #define NAV_SEEN_UP        0x01u
 #define NAV_SEEN_DOWN      0x02u
 #define NAV_SEEN_R         0x04u
@@ -2290,6 +2305,61 @@ static int nav_load_form(void *system_table, u16 requested_form_id) {
     return 1;
 }
 
+static void nav_discover_config_commit_path(void *system_table,
+                                            hii_database_protocol *db,
+                                            void *hii_handle) {
+    g_nav_config_driver_handle = 0;
+    g_nav_config_access = 0;
+    g_nav_config_routing = 0;
+    if (!system_table || !db || !hii_handle || !db->get_package_list_handle) {
+        marker("HII_GRAPH_NAV_CONFIG_PATH=NOT_AVAILABLE");
+        return;
+    }
+
+    void *bs = *(void **)((u8 *)system_table + 0x60);
+    if (!bs) {
+        marker("HII_GRAPH_NAV_CONFIG_PATH=NOT_AVAILABLE");
+        return;
+    }
+    handle_protocol_fn handle_protocol =
+        *(handle_protocol_fn *)((u8 *)bs + 0x98);
+    locate_protocol_fn locate = *(locate_protocol_fn *)((u8 *)bs + 0x140);
+    if (!handle_protocol || !locate) {
+        marker("HII_GRAPH_NAV_CONFIG_PATH=NOT_AVAILABLE");
+        return;
+    }
+
+    if (db->get_package_list_handle(db, hii_handle,
+                                    &g_nav_config_driver_handle) == 0 &&
+        g_nav_config_driver_handle) {
+        marker("HII_GRAPH_NAV_CONFIG_DRIVER_HANDLE=PASS");
+        if (handle_protocol(g_nav_config_driver_handle,
+                            &g_hii_config_access_guid,
+                            &g_nav_config_access) == 0 &&
+            g_nav_config_access)
+            marker("HII_GRAPH_NAV_CONFIG_ACCESS_DISCOVERY=PASS");
+        else
+            marker("HII_GRAPH_NAV_CONFIG_ACCESS_DISCOVERY=NOT_AVAILABLE");
+    } else {
+        marker("HII_GRAPH_NAV_CONFIG_DRIVER_HANDLE=NOT_AVAILABLE");
+    }
+
+    if (locate(&g_hii_config_routing_guid, 0, &g_nav_config_routing) == 0 &&
+        g_nav_config_routing)
+        marker("HII_GRAPH_NAV_CONFIG_ROUTING_DISCOVERY=PASS");
+    else
+        marker("HII_GRAPH_NAV_CONFIG_ROUTING_DISCOVERY=NOT_AVAILABLE");
+
+    if (g_nav_config_access && g_nav_config_routing)
+        marker("HII_GRAPH_NAV_COMMIT_PATH_DISCOVERY=PASS");
+    else
+        marker("HII_GRAPH_NAV_COMMIT_PATH_DISCOVERY=PARTIAL");
+
+    /* Discovery only. No RouteConfig, callback, or SetVariable write is
+       permitted until transaction serialization and rollback are proven. */
+    marker("HII_GRAPH_NAV_ROUTE_CONFIG_NOT_INVOKED=PASS");
+}
+
 #endif
 
 static int resolve_hii_prompt(void *system_table) {
@@ -2482,6 +2552,7 @@ static int resolve_hii_prompt(void *system_table) {
         g_nav_hii_handle = handle;
         g_nav_m1603qa_308_profile = 1u;
         g_nav_form_history_depth = 0u;
+        nav_discover_config_commit_path(system_table, db, handle);
         if (!nav_load_form(system_table, 0x2710u)) {
             marker("HII_GRAPH_NAV_PROFILE=M1603QA_BIOS_308_FORM_LOAD_FAILED");
             return 0;
