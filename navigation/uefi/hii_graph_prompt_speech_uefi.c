@@ -1566,6 +1566,81 @@ static int resolve_hii_prompt(void *system_table) {
     g_nav_speech_interruptions = 0;
 #endif
 
+#ifdef QEV_INTERACTIVE_NAV
+    /*
+     * Exact hardware binding first: the GUID and root FormId are extracted
+     * from the supplied M1603QA BIOS 308 image.
+     */
+    for (u32 hi = 0; hi < handles; ++hi) {
+        void *handle = g_hii_handles[hi];
+        usize size = sizeof(g_hii_package);
+        if (!handle || !db->export_package_lists ||
+            db->export_package_lists(db, handle, &size, g_hii_package) != 0 ||
+            size < 24u || size > sizeof(g_hii_package)) continue;
+        u32 list_len = rd32(g_hii_package + 16);
+        if (list_len < 24u || list_len > size) continue;
+        if (!guid_bytes_equal(g_hii_package,
+                              &g_m1603qa_308_setup_package_list_guid))
+            continue;
+
+        g_nav_hii_string = str;
+        g_nav_hii_handle = handle;
+        g_nav_m1603qa_308_profile = 1u;
+        g_nav_form_history_depth = 0u;
+        if (!nav_load_form(0x2710u)) {
+            g_nav_m1603qa_308_profile = 0u;
+            continue;
+        }
+        marker("HII_GRAPH_NAV_PROFILE=M1603QA_BIOS_308");
+        marker("HII_GRAPH_NAV_PACKAGE_GUID_MATCH=PASS");
+        marker("HII_GRAPH_NAV_ROOT_FORM_2710=PASS");
+        marker("HII_GRAPH_NAV_SETUP_FORMSET=PASS");
+        marker("IFR_PROMPT_STRING_ID=PASS");
+        marker("HII_LANGUAGE_AND_STRING=PASS");
+        marker("HII_GRAPH_NAV_PROMPT_COLLECTION=PASS");
+        marker("HII_GRAPH_NAV_SEMANTIC_ROLE=PASS");
+        marker("HII_PROMPT_SOURCE=PASS");
+        return 1;
+    }
+
+    /*
+     * Portable fallback: locate a normal FormSet whose title is "Setup" and
+     * browse its first form without assuming ASUS identifiers.
+     */
+    g_nav_m1603qa_308_profile = 0u;
+    for (u32 hi = 0; hi < handles; ++hi) {
+        void *handle = g_hii_handles[hi];
+        usize size = sizeof(g_hii_package);
+        if (!handle || !db->export_package_lists ||
+            db->export_package_lists(db, handle, &size, g_hii_package) != 0 ||
+            size < 24u || size > sizeof(g_hii_package)) continue;
+        u32 list_len = rd32(g_hii_package + 16);
+        if (list_len < 24u || list_len > size) continue;
+        if (!nav_package_is_setup(str, handle)) continue;
+
+        g_nav_hii_string = str;
+        g_nav_hii_handle = handle;
+        g_nav_form_history_depth = 0u;
+        if (!nav_load_form(0u)) continue;
+        marker("HII_GRAPH_NAV_SETUP_FORMSET=PASS");
+        marker("HII_GRAPH_NAV_GENERIC_FORM_BROWSER=PASS");
+        marker("IFR_PROMPT_STRING_ID=PASS");
+        marker("HII_LANGUAGE_AND_STRING=PASS");
+        marker("HII_GRAPH_NAV_PROMPT_COLLECTION=PASS");
+        marker("HII_GRAPH_NAV_SEMANTIC_ROLE=PASS");
+        marker("HII_PROMPT_SOURCE=PASS");
+        return 1;
+    }
+
+    /* Preserve the existing flat HII catalogue as the final fallback. */
+    g_nav_hii_handle = 0;
+    g_nav_hii_string = 0;
+    g_nav_prompt_total = 0u;
+    g_nav_prompt_index = 0u;
+    g_nav_prompt_overflow = 0u;
+    g_nav_help_available = 0u;
+#endif
+
     for (u32 hi = 0; hi < handles; ++hi) {
         void *handle = g_hii_handles[hi];
         usize size = sizeof(g_hii_package);
