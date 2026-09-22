@@ -1237,6 +1237,39 @@ static int nav_package_is_setup(hii_string_protocol *str, void *handle) {
     return 0;
 }
 
+static int nav_get_form_title(u16 form_id, char *out, u32 *count_out) {
+    if (!form_id || !out || !count_out || !g_nav_hii_string || !g_nav_hii_handle) return 0;
+    u32 list_len = rd32(g_hii_package + 16);
+    if (list_len < 24u || list_len > sizeof(g_hii_package)) return 0;
+    const u8 *p = g_hii_package + 20;
+    const u8 *list_end = g_hii_package + list_len;
+    while (p + 4u <= list_end) {
+        u32 hdr = rd32(p);
+        u32 len = hdr & 0x00ffffffu;
+        u8 type = (u8)(hdr >> 24);
+        if (len < 4u || p + len > list_end) return 0;
+        if (type == 0xdfu) break;
+        if (type == 0x02u) {
+            const u8 *q = p + 4;
+            const u8 *end = p + len;
+            while (q + 2u <= end) {
+                u8 op = q[0];
+                u32 oplen = (u32)(q[1] & 0x7fu);
+                if (oplen < 2u || q + oplen > end) break;
+                if (op == 0x01u && oplen >= 6u && rd16(q + 2) == form_id) {
+                    u16 title_token = rd16(q + 4);
+                    return title_token &&
+                           get_hii_string(g_nav_hii_string, g_nav_hii_handle,
+                                          title_token, out, count_out);
+                }
+                q += oplen;
+            }
+        }
+        p += len;
+    }
+    return 0;
+}
+
 /*
  * Read-only form browser: collect only one IFR form at a time instead of
  * flattening every firmware page into one prompt list. REF activation can
@@ -1296,11 +1329,18 @@ static int nav_load_form(u16 requested_form_id) {
                     if (help_token)
                         (void)get_hii_string(g_nav_hii_string, g_nav_hii_handle,
                                              help_token, help_candidate, &help_count);
-                    if (token &&
-                        get_hii_string(g_nav_hii_string, g_nav_hii_handle,
-                                       token, candidate, &candidate_count)) {
-                        u16 ref_form_id =
-                            (op == 0x0fu && oplen >= 15u) ? rd16(q + 13) : 0u;
+                    u16 ref_form_id =
+                        (op == 0x0fu && oplen >= 15u) ? rd16(q + 13) : 0u;
+                    int have_prompt =
+                        token && get_hii_string(g_nav_hii_string, g_nav_hii_handle,
+                                                token, candidate, &candidate_count);
+                    if (!have_prompt && ref_form_id) {
+                        have_prompt = nav_get_form_title(ref_form_id, candidate,
+                                                         &candidate_count);
+                        if (have_prompt)
+                            marker("HII_GRAPH_NAV_REF_TITLE_FALLBACK=PASS");
+                    }
+                    if (have_prompt) {
                         (void)nav_prompt_add(op, candidate, candidate_count,
                                              help_candidate, help_count, ref_form_id);
                     }
@@ -1316,6 +1356,10 @@ static int nav_load_form(u16 requested_form_id) {
     nav_prompt_load(0u);
     marker("HII_GRAPH_NAV_FORM_AWARE=PASS");
     marker("HII_GRAPH_NAV_FORM_LOAD=PASS");
+    serial_puts("HII_GRAPH_NAV_FORM_ID=0x");
+    serial_hex8((u8)(selected_form_id >> 8));
+    serial_hex8((u8)selected_form_id);
+    serial_puts("\r\n");
     if (g_nav_form_title_length) {
         serial_puts("HII_GRAPH_NAV_FORM_TITLE=");
         serial_puts(g_nav_form_title);
