@@ -11,7 +11,7 @@ static void test_toggle_focus(void) {
     };
     qev_utterance out;
     assert(qev_semantic_focus_utterance(&node, &out));
-    assert(strcmp(out.text, "toggle, checked, Secure Boot, enabled") == 0);
+    assert(strcmp(out.text, "toggle checked Secure Boot enabled") == 0);
     assert(out.priority == QEV_SPEECH_FOCUS);
     assert(out.interrupt == 1u);
     assert(out.truncated == 0u);
@@ -36,7 +36,7 @@ static void test_firmware_states(void) {
     qev_utterance out;
     assert(qev_semantic_focus_utterance(&node, &out));
     assert(strcmp(out.text,
-                  "numeric setting, read only, preview, reset required, CPU limit, 45") == 0);
+                  "numeric setting read only preview reset required CPU limit 45") == 0);
 }
 
 static void test_unknown_native_role_fallback(void) {
@@ -45,7 +45,7 @@ static void test_unknown_native_role_fallback(void) {
     };
     qev_utterance out;
     assert(qev_semantic_focus_utterance(&node, &out));
-    assert(strcmp(out.text, "vendor control, Vendor option, active") == 0);
+    assert(strcmp(out.text, "vendor control Vendor option active") == 0);
 }
 
 static void test_event_policy(void) {
