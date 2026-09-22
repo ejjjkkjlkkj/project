@@ -1,3 +1,5 @@
+#include "semantic_core.h"
+
 typedef unsigned char u8;
 typedef unsigned short u16;
 typedef unsigned int u32;
@@ -1346,6 +1348,49 @@ static const char *ifr_semantic_role(u8 op) {
 #define NAV_Q_RECONNECT_REQUIRED 0x40u
 #define NAV_Q_OPTIONS_ONLY       0x80u
 
+static qev_semantic_role nav_semantic_role_for_opcode(u8 op) {
+    switch (op) {
+        case 0x02u: return QEV_ROLE_STATUS;
+        case 0x03u: return QEV_ROLE_STATUS;
+        case 0x05u: return QEV_ROLE_CHOICE;
+        case 0x06u: return QEV_ROLE_TOGGLE;
+        case 0x07u: return QEV_ROLE_NUMERIC_SETTING;
+        case 0x08u: return QEV_ROLE_PASSWORD_FIELD;
+        case 0x0cu: return QEV_ROLE_BUTTON;
+        case 0x0du: return QEV_ROLE_BUTTON;
+        case 0x0fu: return QEV_ROLE_FIRMWARE_MENU;
+        case 0x1au: return QEV_ROLE_SETTING;
+        case 0x1bu: return QEV_ROLE_SETTING;
+        case 0x1cu: return QEV_ROLE_TEXT_SETTING;
+        case 0x23u: return QEV_ROLE_CHOICE;
+        default: return QEV_ROLE_UNKNOWN;
+    }
+}
+
+static unsigned int nav_semantic_state_bits(u8 prompt_index, u8 staged) {
+    if (prompt_index >= g_nav_prompt_total) return QEV_STATE_NONE;
+    unsigned int states = QEV_STATE_FOCUSED;
+    u8 condition_flags = g_nav_prompt_condition_flags[prompt_index];
+    u8 question_flags = g_nav_prompt_question_flags[prompt_index];
+
+    if (condition_flags & (NAV_COND_GRAY | NAV_COND_DISABLE | NAV_COND_UNKNOWN))
+        states |= QEV_STATE_DISABLED;
+    if (question_flags & NAV_Q_READ_ONLY)
+        states |= QEV_STATE_READ_ONLY;
+    if (staged)
+        states |= QEV_STATE_PREVIEW;
+    if (question_flags & NAV_Q_CALLBACK)
+        states |= QEV_STATE_CALLBACK;
+    if (question_flags & NAV_Q_RESET_REQUIRED)
+        states |= QEV_STATE_RESET_REQUIRED;
+    if (question_flags & NAV_Q_RECONNECT_REQUIRED)
+        states |= QEV_STATE_RECONNECT_REQUIRED;
+    if (g_nav_prompt_opcodes[prompt_index] == 0x08u)
+        states |= QEV_STATE_PROTECTED;
+
+    return states;
+}
+
 static u8 ifr_condition_flag(u8 op) {
     switch (op) {
         case 0x0au: return NAV_COND_SUPPRESS; /* EFI_IFR_SUPPRESS_IF_OP */
@@ -1931,37 +1976,49 @@ static int nav_build_focus_speech(void *system_table, u8 prompt_index,
         !value_text || !value_length)
         return 0;
 
-    if (value_length >= 32u) {
+    u8 op = g_nav_prompt_opcodes[prompt_index];
+    u8 speak_value = op != 0x08u;
+    if (speak_value && value_length >= 32u) {
         for (u8 i = 0u; i < 32u; ++i) out[i] = value_text[i];
         out[32] = 0;
         *length_out = 32u;
         return 1;
     }
 
-    /* Preserve the live value at the end: it is more important than a
-       truncated label for blind operation. Role/state remain at the front. */
-    u8 budget = (u8)(32u - value_length - 1u);
-    u8 n = 0u;
-    const char *role = ifr_semantic_role(g_nav_prompt_opcodes[prompt_index]);
-    while (*role && n < budget) out[n++] = *role++;
+    qev_semantic_node node;
+    node.role = nav_semantic_role_for_opcode(op);
+    node.native_role = ifr_semantic_role(op);
+    node.label = 0;
+    node.value = 0;
+    node.states = nav_semantic_state_bits(prompt_index, staged);
 
-    const char *state = 0;
-    if (g_nav_prompt_condition_flags[prompt_index] & NAV_COND_GRAY)
-        state = " disabled";
-    else if (g_nav_prompt_condition_flags[prompt_index] & NAV_COND_UNKNOWN)
-        state = " conditional";
-    else if (g_nav_prompt_question_flags[prompt_index] & NAV_Q_READ_ONLY)
-        state = " read only";
-    else if (staged)
-        state = " preview";
-    if (state) while (*state && n < budget) out[n++] = *state++;
+    qev_utterance semantic;
+    if (!qev_semantic_focus_utterance(&node, &semantic)) return 0;
+    marker("HII_GRAPH_NAV_SEMANTIC_CORE=PASS");
+
+    /*
+     * The current HDA phrase path schedules speech in <=32-character chunks.
+     * Preserve the live value at the end and truncate role/state/label first.
+     * Password values are never appended: the semantic prefix says protected.
+     */
+    u8 tail = speak_value ? value_length : 0u;
+    u8 separator = tail ? 1u : 0u;
+    u8 budget = (u8)(32u - tail - separator);
+    u8 n = 0u;
+
+    for (u8 i = 0u; semantic.text[i] && n < budget; ++i)
+        out[n++] = semantic.text[i];
 
     if (n < budget && g_nav_prompt_lengths[prompt_index]) out[n++] = ' ';
     for (u8 i = 0u; i < g_nav_prompt_lengths[prompt_index] && n < budget; ++i)
         out[n++] = g_nav_prompts[prompt_index][i];
-    if (n && n < 32u) out[n++] = ' ';
-    for (u8 i = 0u; i < value_length && n < 32u; ++i)
-        out[n++] = value_text[i];
+
+    if (tail && n < 32u) out[n++] = ' ';
+    if (speak_value) {
+        for (u8 i = 0u; i < value_length && n < 32u; ++i)
+            out[n++] = value_text[i];
+    }
+
     out[n] = 0;
     *length_out = n;
     return n != 0u;
