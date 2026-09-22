@@ -221,7 +221,7 @@ def main():
         f'bank-sha256={hashlib.sha256(bank).hexdigest()}\n'
         'letter-map=a-z-french-letter-names\n'
         'digit-map=0-9-french-number-names\n'
-        'max-input-graphemes=64\n'
+        'max-input-graphemes=127\n'
         'max-units-per-letter=8\n'
         f'word-lexicon-count={len(word_names)}\n'
         f'word-name-stride={WORD_NAME_STRIDE}\n'
