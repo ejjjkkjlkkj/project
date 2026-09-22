@@ -1621,6 +1621,8 @@ static int nav_find_form(int direction, u8 *index_out) {
     }
     return 0;
 }
+static int nav_load_form(void *system_table, u16 requested_form_id);
+
 static int nav_find_question_index(u16 question_id, u8 *index_out) {
     if (!question_id || !index_out) return 0;
     for (u8 i = 0u; i < g_nav_prompt_total; ++i) {
