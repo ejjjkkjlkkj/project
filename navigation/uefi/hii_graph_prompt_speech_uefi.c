@@ -1262,6 +1262,9 @@ static int nav_format_u64(u64 value, char *out, u8 *length_out) {
     return n != 0u;
 }
 
+static int nav_read_scalar_value(void *system_table, u8 prompt_index,
+                                 u64 *value_out);
+
 static int nav_live_value_text(void *system_table, u8 prompt_index,
                                const char **text_out, u8 *length_out,
                                u8 *checkbox_state_out) {
