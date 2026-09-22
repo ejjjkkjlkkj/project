@@ -4,7 +4,7 @@ import hashlib, importlib.util, struct, sys
 from pathlib import Path
 
 ROOT=Path(__file__).resolve().parents[2]
-SOURCE=ROOT/'boot'/'uefi-native-speech-v1'/'build_uefi_native_speech.py'
+SOURCE=ROOT/'voice'/'uefi_units'/'build_native_units.py'
 LETTER_UNITS={
  # Clear fallback spelling for arbitrary firmware labels. The previous map
  # treated each grapheme as a raw phoneme, which made unknown HII labels sound
@@ -108,7 +108,7 @@ def main():
     out.write_text('\n'.join(lines))
     meta.write_text(
         'OS-UEFI-HII-GRAPH-PROMPT-SPEECH-UNITS-V1\n'
-        'source=boot/uefi-native-speech-v1/build_uefi_native_speech.py\n'
+        'source=voice/uefi_units/build_native_units.py\n'
         f'source-sha256={hashlib.sha256(SOURCE.read_bytes()).hexdigest()}\n'
         f'unit-names={",".join(names)}\n'
         f'unit-count={len(names)}\n'
