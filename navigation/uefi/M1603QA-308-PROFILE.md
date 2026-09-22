@@ -45,3 +45,30 @@ The native navigation engine tracks:
 - structural navigation across controls and forms
 
 The next correctness gate is evaluating conditional expressions against live VarStores so hidden/disabled controls can be filtered according to the current firmware state.
+
+
+## Native screen-reader command map
+
+The BIOS 308 reader now exposes a read-only navigation layer plus a **non-persistent edit preview**:
+
+| Key | Function |
+|---|---|
+| Arrow keys / Tab / Home / End / Page Up / Page Down | Move focus |
+| Enter | Open a referenced HII form when safe |
+| Esc | Return to the parent form |
+| H | Speak HII contextual help |
+| V | Speak the live firmware value |
+| W | Where Am I: form + control + value |
+| P | Speak position in the current form |
+| R | Reload the current form from live VarStores and preserve focus |
+| F/B/X/C/E (+ uppercase reverse variants) | Structural navigation by form/button/checkbox/choice/editable control |
+| O / Shift+O | Preview next / previous OneOf value in RAM |
+| Space | Preview checkbox toggle in RAM |
+| D | Discard every staged preview edit |
+| S | Save is deliberately blocked until a verified HII ConfigAccess/RouteConfig commit path exists |
+
+### Safety invariant
+
+Preview edits never call `SetVariable`, `RouteConfig`, or a vendor callback. They are stored only in the reader's RAM, announced as **preview**, and disappear when discarded or when the EFI application exits. Controls that are `GrayOutIf`-disabled or have unresolved conditional state cannot be activated or staged.
+
+This gives the navigation layer a complete edit interaction model without risking Secure Boot, TPM, boot-order, password, or platform settings before the firmware-native commit path is validated.
