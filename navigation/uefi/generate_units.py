@@ -167,7 +167,7 @@ PHRASE_TEXTS = (
     "not checked",
     "protected",
 )
-PHRASE_NAME_STRIDE=32
+PHRASE_NAME_STRIDE=40
 
 def _phrase_unit_name(index):
     return f'phrase_{index}'
