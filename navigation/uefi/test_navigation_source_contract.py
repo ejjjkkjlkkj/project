@@ -45,6 +45,8 @@ required = (
     'HII_GRAPH_NAV_FORM_BACK=PASS',
     'HII_GRAPH_NAV_READ_ONLY_ACTION=BLOCKED',
     'HII_GRAPH_NAV_REF_TITLE_FALLBACK=PASS',
+    'HII_GRAPH_NAV_M1603QA_ROOT_FILTER=PASS',
+    'HII_GRAPH_NAV_FORM_TITLE_SPEECH=PASS',
     'nav_package_is_setup',
     'nav_get_form_title',
     'nav_load_form',
