@@ -37,6 +37,17 @@ required = (
     'key.scan_code == 0x0009u',
     'key.scan_code == 0x000au',
     'key.unicode_char == 0x0009u',
+    'key.unicode_char == 0x000du',
+    'HII_GRAPH_NAV_FORM_AWARE=PASS',
+    'HII_GRAPH_NAV_SETUP_FORMSET=PASS',
+    'HII_GRAPH_NAV_FORM_LOAD=PASS',
+    'HII_GRAPH_NAV_FORM_ENTER=PASS',
+    'HII_GRAPH_NAV_FORM_BACK=PASS',
+    'HII_GRAPH_NAV_READ_ONLY_ACTION=BLOCKED',
+    'nav_package_is_setup',
+    'nav_load_form',
+    'g_nav_ref_form_ids',
+    'g_nav_form_history',
 )
 missing = [needle for needle in required if needle not in text]
 assert not missing, f"missing navigation contract markers: {missing}"
