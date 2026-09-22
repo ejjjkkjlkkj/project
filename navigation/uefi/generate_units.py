@@ -224,8 +224,12 @@ def main():
     converted={n:convert(source_units[n], speech.SAMPLE_RATE) for n in names}
     voicecore=load_voicecore()
     word_clips={word:compact_voice_clip(voicecore.synthesize(word,'screen')) for word in sorted(WORD_UNITS)}
+    letter_clips={ch:compact_voice_clip(voicecore.synthesize(voicecore.LETTER_NAMES[ch],'screen')) for ch in 'abcdefghijklmnopqrstuvwxyz'}
+    digit_clips={ch:compact_voice_clip(voicecore.synthesize(voicecore.DIGITS[ch],'screen')) for ch in '0123456789'}
     if not all(word_clips.values()):
         raise SystemExit('empty VoiceCore word clip')
+    if not all(letter_clips.values()) or not all(digit_clips.values()):
+        raise SystemExit('empty VoiceCore spelling clip')
     offsets=[]; lengths=[]; bank=bytearray()
     for n in names:
         offsets.append(len(bank)); lengths.append(len(converted[n])); bank += converted[n]
@@ -273,6 +277,20 @@ def main():
         word_clip_bank += clip
     if len(word_clip_bank) > 8*1024*1024:
         raise SystemExit(f'word speech bank too large: {len(word_clip_bank)}')
+
+    letter_clip_offsets=[]; letter_clip_lengths=[]; letter_clip_bank=bytearray()
+    for ch in 'abcdefghijklmnopqrstuvwxyz':
+        clip=letter_clips[ch]
+        letter_clip_offsets.append(len(letter_clip_bank))
+        letter_clip_lengths.append(len(clip))
+        letter_clip_bank += clip
+
+    digit_clip_offsets=[]; digit_clip_lengths=[]; digit_clip_bank=bytearray()
+    for ch in '0123456789':
+        clip=digit_clips[ch]
+        digit_clip_offsets.append(len(digit_clip_bank))
+        digit_clip_lengths.append(len(clip))
+        digit_clip_bank += clip
     lines=[
         '/* Generated deterministically from first-party native speech units. */',
         arr_u8('qev_unit_bank',list(bank)),
@@ -297,6 +315,14 @@ def main():
         f'const unsigned int qev_word_pcm_rate_hz = 16000u;\n',
         arr_u32('qev_word_pcm_off',word_clip_offsets),
         arr_u32('qev_word_pcm_len',word_clip_lengths),
+        arr_u8('qev_letter_pcm_bank',list(letter_clip_bank)),
+        f'const unsigned int qev_letter_pcm_bank_len = {len(letter_clip_bank)}u;\n',
+        arr_u32('qev_letter_pcm_off',letter_clip_offsets),
+        arr_u32('qev_letter_pcm_len',letter_clip_lengths),
+        arr_u8('qev_digit_pcm_bank',list(digit_clip_bank)),
+        f'const unsigned int qev_digit_pcm_bank_len = {len(digit_clip_bank)}u;\n',
+        arr_u32('qev_digit_pcm_off',digit_clip_offsets),
+        arr_u32('qev_digit_pcm_len',digit_clip_lengths),
     ]
     out.write_text('\n'.join(lines))
     meta.write_text(
@@ -316,13 +342,15 @@ def main():
         f'word-unit-stride={WORD_UNIT_STRIDE}\n'
         f'word-pcm-bank-bytes={len(word_clip_bank)}\n'
         f'word-pcm-bank-sha256={hashlib.sha256(word_clip_bank).hexdigest()}\n'
+        f'letter-pcm-bank-bytes={len(letter_clip_bank)}\n'
+        f'digit-pcm-bank-bytes={len(digit_clip_bank)}\n'
         'word-pcm-rate-hz=16000\n'
         'word-renderer=voice/v4/native_speech_v4.py:screen\n'
         'source-sample-rate-hz='+str(speech.SAMPLE_RATE)+'\n'
         'inter-letter-silence-ms=18-runtime-gap\n'
         'intra-word-phoneme-silence-ms=0\n'
         'word-silence-ms=70\n'
-        'speech-mode=whole-word-voicecore-fr-v6\n'
+        'speech-mode=whole-word-plus-spoken-spelling-voicecore-fr-v6\n'
         'full-utterance-asset=false\n'
     )
     print('HII_GRAPH_PROMPT_UNIT_GENERATION=PASS')
