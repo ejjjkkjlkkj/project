@@ -2,6 +2,9 @@ name: vmware-uefi-selfhosted
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - runner-amd5800h-vmware-proof-20260922
 
 permissions:
   contents: read
