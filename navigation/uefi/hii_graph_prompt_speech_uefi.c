@@ -3253,7 +3253,7 @@ static int wait_navigation_keys(void *system_table) {
             u8 speech_override_length = 0;
             if (key.unicode_char == 0x001bu || key.scan_code == 0x0017u) {
                 marker("HII_GRAPH_NAV_KEY=ESC");
-                speech_dma_stop();
+                speech_phrase_cancel();
                 if (g_nav_m1603qa_308_profile && g_nav_form_history_depth) {
                     u16 parent = g_nav_form_history[--g_nav_form_history_depth];
                     if (!nav_load_form(system_table, parent)) return 0;
