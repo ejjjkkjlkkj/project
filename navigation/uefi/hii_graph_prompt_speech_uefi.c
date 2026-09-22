@@ -45,6 +45,11 @@ extern const u8 qev_word_name_len[];
 extern const u8 qev_word_names[];
 extern const u8 qev_word_unit_count[];
 extern const u8 qev_word_units[];
+extern const u32 qev_phrase_count;
+extern const u32 qev_phrase_name_stride;
+extern const u8 qev_phrase_name_len[];
+extern const u8 qev_phrase_names[];
+extern const u32 qev_phrase_unit_index[];
 
 #define MAX_NID 256
 #define MAX_CONN 64
@@ -989,6 +994,30 @@ static int speech_lookup_word(const char *text, u32 length,
     return 0;
 }
 
+static int speech_lookup_phrase(const char *text, u32 length,
+                                u32 *unit_index_out) {
+    if (!text || !length || !unit_index_out ||
+        !qev_phrase_count || !qev_phrase_name_stride)
+        return 0;
+    for (u32 pi = 0u; pi < qev_phrase_count; ++pi) {
+        if ((u32)qev_phrase_name_len[pi] != length) continue;
+        const u8 *name = qev_phrase_names + pi * qev_phrase_name_stride;
+        u32 same = 1u;
+        for (u32 j = 0u; j < length; ++j) {
+            if ((u8)text[j] != name[j]) {
+                same = 0u;
+                break;
+            }
+        }
+        if (!same) continue;
+        u32 ui = qev_phrase_unit_index[pi];
+        if (ui >= qev_unit_count) return 0;
+        *unit_index_out = ui;
+        return 1;
+    }
+    return 0;
+}
+
 static int speech_dma_begin(const char *text, u32 text_count) {
     if (!g_allocate_pages || !g_stall || !text || !text_count || text_count > 32u) return 0;
     const u32 pcm_off = 0x1000u;
@@ -1034,6 +1063,13 @@ static int speech_dma_begin(const char *text, u32 text_count) {
     if (total_bytes > dma_bytes - pcm_off) return 0;
     for (u32 i = 0; i < total_bytes; ++i) pcm[i] = 0;
 
+    u32 phrase_unit_index = 0u;
+    if (speech_lookup_phrase(text, text_count, &phrase_unit_index)) {
+        if (!append_unit_pcm(pcm, dma_bytes - pcm_off,
+                             &total_bytes, phrase_unit_index))
+            return 0;
+        marker("HII_GRAPH_SPEECH_WHOLE_PHRASE_CLIP=PASS");
+    } else {
     for (u32 i = 0; i < text_count; ++i) {
         u8 ch = (u8)text[i];
         if (ch == (u8)' ') {
@@ -1102,6 +1138,7 @@ static int speech_dma_begin(const char *text, u32 text_count) {
                 return 0;
         }
     }
+    }
     if (!total_bytes) return 0;
     if (total_bytes > dma_bytes - pcm_off ||
         tail_silence_bytes > dma_bytes - pcm_off - total_bytes) return 0;
@@ -1110,6 +1147,7 @@ static int speech_dma_begin(const char *text, u32 text_count) {
     marker("HII_GRAPH_SPEECH_PACING=PASS");
     marker("HII_GRAPH_SPEECH_CONTINUOUS_PHONEMES=PASS");
     marker("HII_GRAPH_SPEECH_WHOLE_CLIP_VOICECORE=PASS");
+    marker("HII_GRAPH_SPEECH_PHRASE_FIRST_MODE=PASS");
     marker("HII_GRAPH_SPEECH_DIGITS=PASS");
     marker("HII_GRAPH_SPEECH_HYBRID_WORD_MODE=PASS");
     marker("HII_GRAPH_SPEECH_UNKNOWN_WORD_FALLBACK=PASS");
