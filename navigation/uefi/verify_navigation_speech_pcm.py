@@ -5,6 +5,11 @@ This proves emitted content, not human intelligibility. It pairs the F1, Down
 and Up runtime speech strings from the serial log with the actual QEMU WAV,
 reproduces the firmware's <=32-character word-boundary chunking, and requires
 every captured chunk to be bit-identical and ordered after the startup phrase.
+
+Consecutive DMA chunks contain deliberate leading/trailing zero PCM. Those
+silence regions can overlap as byte patterns in a continuous capture, so search
+ordering advances to the end of each chunk's non-silent core rather than to the
+end of its trailing silence. The complete expected chunk must still match.
 """
 from __future__ import annotations
 
@@ -24,6 +29,8 @@ KEY_MARKERS = {
 EXPECTED_KEYS = ("F1", "DOWN", "UP")
 MAX_PHRASE = 64
 MAX_CHUNK = 32
+PCM_FRAME_BYTES = 4
+ZERO_FRAME = bytes(PCM_FRAME_BYTES)
 
 
 def split_runtime_phrase(text: str) -> list[str]:
@@ -100,6 +107,27 @@ def wav_bytes(path: Path) -> tuple[dict[str, int | str], bytes]:
     return params, raw
 
 
+def outer_silence_bytes(pcm: bytes) -> tuple[int, int]:
+    if len(pcm) % PCM_FRAME_BYTES:
+        raise ValueError("expected PCM is not frame-aligned")
+    start = 0
+    end = len(pcm)
+    while start < end and pcm[start : start + PCM_FRAME_BYTES] == ZERO_FRAME:
+        start += PCM_FRAME_BYTES
+    while end > start and pcm[end - PCM_FRAME_BYTES : end] == ZERO_FRAME:
+        end -= PCM_FRAME_BYTES
+    if start == end:
+        raise ValueError("speech chunk contains no non-silent PCM")
+    return start, len(pcm) - end
+
+
+def find_frame_aligned(raw: bytes, expected: bytes, start: int) -> int:
+    pos = raw.find(expected, start)
+    while pos >= 0 and pos % PCM_FRAME_BYTES:
+        pos = raw.find(expected, pos + 1)
+    return pos
+
+
 def main() -> int:
     if len(sys.argv) not in (3, 4):
         print(
@@ -132,8 +160,19 @@ def main() -> int:
         chunks = split_runtime_phrase(event["text"])
         for chunk_index, chunk in enumerate(chunks):
             expected = speech_pcm.render_runtime_pcm(chunk)
-            offset = raw.find(expected, cursor) if all_exact else -1
+            leading_silence, trailing_silence = outer_silence_bytes(expected)
+            core_bytes = len(expected) - leading_silence - trailing_silence
+            offset = (
+                find_frame_aligned(raw, expected, cursor)
+                if all_exact
+                else -1
+            )
             exact = offset >= 0
+            core_end = (
+                offset + leading_silence + core_bytes
+                if exact
+                else -1
+            )
             chunk_results.append(
                 {
                     "key": event["key"],
@@ -142,19 +181,27 @@ def main() -> int:
                     "chunk": chunk,
                     "expected_bytes": len(expected),
                     "expected_sha256": hashlib.sha256(expected).hexdigest(),
+                    "leading_silence_bytes": leading_silence,
+                    "non_silent_core_bytes": core_bytes,
+                    "trailing_silence_bytes": trailing_silence,
                     "capture_offset_bytes": offset,
+                    "ordered_core_end_bytes": core_end,
                     "bit_identical": exact,
                 }
             )
             if not exact:
                 all_exact = False
                 break
-            cursor = offset + len(expected)
+
+            # Do not skip a legitimate following chunk whose leading silence
+            # begins inside this chunk's trailing all-zero region.
+            cursor = core_end
         if not all_exact:
             break
 
     report = {
         "scope": "COMPLETED_F1_DOWN_UP_NAVIGATION_SPEECH",
+        "ordering_rule": "FULL_CHUNK_EXACT_MATCH_ADVANCE_BY_NON_SILENT_CORE",
         "wav": params,
         "discovery_prefix_exact": discovery_exact,
         "events": events,
