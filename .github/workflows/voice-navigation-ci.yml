@@ -37,8 +37,12 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p build
-          cc -std=c11 -Wall -Wextra -Werror navigation/uefi/semantic_core.c navigation/uefi/test_semantic_core.c -o build/test-semantic-core
-          ./build/test-semantic-core
+          cc -std=c11 -Wall -Wextra -Werror -pedantic navigation/uefi/semantic_core.c navigation/uefi/test_semantic_core.c -o build/test-semantic-core
+          ./build/test-semantic-core | tee build/semantic_core-test.txt
+          grep -F 'UEFI_SEMANTIC_CORE_TESTS=PASS' build/semantic_core-test.txt
+          cc -std=c11 -Wall -Wextra -Werror -pedantic -fsanitize=address,undefined -fno-omit-frame-pointer navigation/uefi/semantic_core.c navigation/uefi/test_semantic_core.c -o build/test-semantic-core-sanitized
+          ASAN_OPTIONS=detect_leaks=1 ./build/test-semantic-core-sanitized | tee build/semantic_core-sanitizer.txt
+          grep -F 'UEFI_SEMANTIC_CORE_TESTS=PASS' build/semantic_core-sanitizer.txt
 
       - name: Generate UEFI navigation speech units
         run: |
@@ -164,4 +168,7 @@ jobs:
           path: |
             build/NAVIGATION.EFI
             build/navigation_units.txt
+            build/semantic_core-test.txt
+            build/semantic_core-sanitizer.txt
+            build/semantic_core.obj
           if-no-files-found: error
