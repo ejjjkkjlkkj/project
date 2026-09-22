@@ -77,6 +77,8 @@ static u64 g_speech_elapsed_us;
 
 typedef u64 (*locate_protocol_fn)(const void *protocol, void *registration, void **interface_out);
 typedef u64 (*handle_protocol_fn)(void *handle, const void *protocol, void **interface_out);
+typedef u64 (*get_variable_fn)(const u16 *name, const void *guid,
+                               u32 *attributes, usize *data_size, void *data);
 typedef u64 (*file_open_fn)(void *self, void **new_handle, const u16 *name, u64 open_mode, u64 attributes);
 typedef u64 (*file_close_fn)(void *self);
 typedef u64 (*file_delete_fn)(void *self);
@@ -168,6 +170,8 @@ static u8 g_nav_prompt_opcodes[MAX_HII_NAV_PROMPTS];
 static u16 g_nav_prompt_form_ids[MAX_HII_NAV_PROMPTS];
 static u16 g_nav_prompt_question_ids[MAX_HII_NAV_PROMPTS];
 static u16 g_nav_ref_form_ids[MAX_HII_NAV_PROMPTS];
+static char g_nav_values[MAX_HII_NAV_PROMPTS][33];
+static u8 g_nav_value_lengths[MAX_HII_NAV_PROMPTS];
 static char g_nav_help[MAX_HII_NAV_PROMPTS][33];
 static u8 g_nav_help_lengths[MAX_HII_NAV_PROMPTS];
 static u8 g_nav_prompt_total;
@@ -187,6 +191,22 @@ static u8 g_nav_form_history_depth;
 static hii_string_protocol *g_nav_hii_string;
 static void *g_nav_hii_handle;
 static u8 g_nav_m1603qa_308_profile;
+static get_variable_fn g_nav_get_variable;
+
+#define MAX_HII_VARSTORES 64
+typedef struct {
+    u16 id;
+    u16 size;
+    efi_guid guid;
+    char name[32];
+} nav_varstore_info;
+static nav_varstore_info g_nav_varstores[MAX_HII_VARSTORES];
+static u8 g_nav_varstore_count;
+static u16 g_nav_cached_varstore_id;
+static usize g_nav_cached_varstore_size;
+static u8 g_nav_cached_varstore_valid;
+static u8 g_nav_varstore_data[4096];
+
 static u8 g_nav_event_mask;
 static u8 g_nav_speech_events;
 static u8 g_nav_realtime_events;
@@ -1199,18 +1219,27 @@ static int get_hii_string(hii_string_protocol *str, void *handle, u16 token, cha
 #ifdef QEV_INTERACTIVE_NAV
 static int nav_prompt_add(u8 opcode, u16 form_id, u16 question_id,
                           const char *text, u32 count,
-                          const char *help, u32 help_count, u16 ref_form_id) {
-    if (!text || !count || count > 32u || help_count > 32u) return 0;
+                          const char *help, u32 help_count,
+                          const char *value, u32 value_count,
+                          u16 ref_form_id) {
+    if (!text || !count || count > 32u || help_count > 32u || value_count > 32u)
+        return 0;
     for (u8 i = 0; i < g_nav_prompt_total; ++i) {
         if (g_nav_prompt_lengths[i] != (u8)count ||
             g_nav_prompt_opcodes[i] != opcode ||
             g_nav_prompt_form_ids[i] != form_id ||
             g_nav_prompt_question_ids[i] != question_id ||
             g_nav_ref_form_ids[i] != ref_form_id ||
+            g_nav_value_lengths[i] != (u8)value_count ||
             g_nav_help_lengths[i] != (u8)help_count) continue;
         u32 same = 1;
         for (u32 j = 0; j < count; ++j) {
             if (g_nav_prompts[i][j] != text[j]) { same = 0; break; }
+        }
+        if (same) {
+            for (u32 j = 0; j < value_count; ++j) {
+                if (g_nav_values[i][j] != value[j]) { same = 0; break; }
+            }
         }
         if (same) {
             for (u32 j = 0; j < help_count; ++j) {
@@ -1231,6 +1260,9 @@ static int nav_prompt_add(u8 opcode, u16 form_id, u16 question_id,
     g_nav_prompt_form_ids[slot] = form_id;
     g_nav_prompt_question_ids[slot] = question_id;
     g_nav_ref_form_ids[slot] = ref_form_id;
+    for (u32 j = 0; j < value_count; ++j) g_nav_values[slot][j] = value[j];
+    g_nav_values[slot][value_count] = 0;
+    g_nav_value_lengths[slot] = (u8)value_count;
     for (u32 j = 0; j < help_count; ++j) g_nav_help[slot][j] = help[j];
     g_nav_help[slot][help_count] = 0;
     g_nav_help_lengths[slot] = (u8)help_count;
@@ -1245,14 +1277,28 @@ static void nav_prompt_load(u8 index) {
     for (u32 j = 0; j < g_prompt_count; ++j) g_prompt_text[j] = g_nav_prompts[index][j];
     g_prompt_text[g_prompt_count] = 0;
 
-    /* A screen reader must announce semantics, not only raw label text.
-       Put the IFR role first so it can never be truncated away. */
+    /*
+     * Announce role + label + current value. Reserve the tail for the value so
+     * a long firmware label cannot hide the state that matters to a blind
+     * user (for example "choice svm mode enabled").
+     */
     const char *role = ifr_semantic_role(g_nav_prompt_opcode);
     u32 n = 0;
+    u32 value_count = g_nav_value_lengths[index];
     while (*role && n < 32u) g_nav_speech_text[n++] = *role++;
     if (n < 32u && g_prompt_count) g_nav_speech_text[n++] = ' ';
-    for (u32 j = 0; j < g_prompt_count && n < 32u; ++j)
+
+    u32 reserve = value_count ? value_count + 1u : 0u;
+    u32 label_limit = reserve < 32u ? 32u - reserve : n;
+    if (label_limit < n) label_limit = n;
+    for (u32 j = 0; j < g_prompt_count && n < label_limit; ++j)
         g_nav_speech_text[n++] = g_prompt_text[j];
+
+    if (value_count && n < 32u) {
+        g_nav_speech_text[n++] = ' ';
+        for (u32 j = 0; j < value_count && n < 32u; ++j)
+            g_nav_speech_text[n++] = g_nav_values[index][j];
+    }
     g_nav_speech_text[n] = 0;
     g_nav_speech_length = (u8)n;
 
