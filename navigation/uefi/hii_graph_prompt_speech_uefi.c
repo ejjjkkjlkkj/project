@@ -1144,7 +1144,8 @@ static int nav_prompt_add(u8 opcode, const char *text, u32 count,
     for (u8 i = 0; i < g_nav_prompt_total; ++i) {
         if (g_nav_prompt_lengths[i] != (u8)count ||
             g_nav_prompt_opcodes[i] != opcode ||
-            g_nav_help_lengths[i] != (u8)help_count) continue;
+            g_nav_help_lengths[i] != (u8)help_count ||
+            g_nav_ref_form_ids[i] != ref_form_id) continue;
         u32 same = 1;
         for (u32 j = 0; j < count; ++j) {
             if (g_nav_prompts[i][j] != text[j]) { same = 0; break; }
