@@ -55,10 +55,26 @@ def main() -> None:
     assert word_bank_bytes <= 8 * 1024 * 1024
     assert len(word_clips["ready"]) > 1000
 
+    letter_clips = {
+        ch: compact_voice_clip(voicecore.synthesize(voicecore.LETTER_NAMES[ch], "screen"))
+        for ch in "abcdefghijklmnopqrstuvwxyz"
+    }
+    digit_clips = {
+        ch: compact_voice_clip(voicecore.synthesize(voicecore.DIGITS[ch], "screen"))
+        for ch in "0123456789"
+    }
+    assert all(letter_clips.values()) and all(digit_clips.values())
+    assert all(len(set(clip)) > 16 for clip in letter_clips.values())
+    assert all(len(set(clip)) > 16 for clip in digit_clips.values())
+    letter_bank_bytes = sum(map(len, letter_clips.values()))
+    digit_bank_bytes = sum(map(len, digit_clips.values()))
+
     print(f"source-rate={speech.SAMPLE_RATE}")
     print(f"unit-count={len(converted)}")
     print(f"bank-bytes={bank_bytes}")
     print(f"word-pcm-bank-bytes={word_bank_bytes}")
+    print(f"letter-pcm-bank-bytes={letter_bank_bytes}")
+    print(f"digit-pcm-bank-bytes={digit_bank_bytes}")
     print(f"word-lexicon-count={len(WORD_UNITS)}")
     print("VOICE_NAVIGATION_CONTRACT=PASS")
 
