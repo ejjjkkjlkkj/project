@@ -1958,6 +1958,7 @@ static int resolve_hii_prompt(void *system_table) {
     g_nav_prompt_index = 0;
     g_nav_prompt_overflow = 0;
     g_nav_varstore_total = 0;
+    g_nav_question_total = 0;
     g_nav_m1603qa_handle_index = 0xffu;
     g_nav_help_available = 0;
     g_nav_event_mask = 0;
@@ -2046,6 +2047,9 @@ static int resolve_hii_prompt(void *system_table) {
                         u8 question_flags =
                             ifr_question_opcode(op) && oplen >= 13u ? q[12] : 0u;
                         u8 value_width = ifr_scalar_width(op, q, oplen);
+                        if (question_id)
+                            nav_question_add((u8)hi, op, value_width,
+                                             question_id, varstore_id, var_info);
                         if (help_token)
                             (void)get_hii_string(str, handle, help_token, help_candidate, &help_count);
                         if (token && get_hii_string(str, handle, token, candidate, &candidate_count)) {
@@ -2132,6 +2136,8 @@ static int resolve_hii_prompt(void *system_table) {
         marker("HII_GRAPH_NAV_SETUP_FORMSET=PASS");
         marker(g_nav_varstore_total ? "HII_GRAPH_NAV_VARSTORE_CATALOG=PASS"
                                     : "HII_GRAPH_NAV_VARSTORE_CATALOG=EMPTY");
+        marker(g_nav_question_total ? "HII_GRAPH_NAV_QUESTION_CATALOG=PASS"
+                                    : "HII_GRAPH_NAV_QUESTION_CATALOG=EMPTY");
         marker("IFR_PROMPT_STRING_ID=PASS");
         marker("HII_LANGUAGE_AND_STRING=PASS");
         marker("HII_GRAPH_NAV_PROMPT_COLLECTION=PASS");
