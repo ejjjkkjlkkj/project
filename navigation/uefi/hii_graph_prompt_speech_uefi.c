@@ -77,7 +77,6 @@ static u8 g_cad;
 static u8 g_afg = INVALID_NID;
 static u8 g_controller_preferred;
 static u32 g_codec_vendor_id;
-static u32 g_selected_pin_default_config = INVALID_RESP;
 static u8 g_selected_pin_is_internal_speaker;
 static stall_fn g_stall;
 static allocate_pages_fn g_allocate_pages;
@@ -3310,7 +3309,6 @@ static int discover_live_graph(u8 *pin_out, u8 *dac_out, u8 *selectors_out) {
     if (best_pin == INVALID_NID) return 0;
     if (!find_route(best_pin, dac_out, selectors_out)) return 0;
     *pin_out = best_pin;
-    g_selected_pin_default_config = best_config;
     g_selected_pin_is_internal_speaker =
         (u8)((((best_config >> 30) & 0x03u) == 0x02u) &&
              (((best_config >> 20) & 0x0fu) == 0x01u));
