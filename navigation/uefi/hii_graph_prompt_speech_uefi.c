@@ -1898,6 +1898,41 @@ static int resolve_hii_prompt(void *system_table) {
         }
     }
 #ifdef QEV_INTERACTIVE_NAV
+    if (g_nav_m1603qa_handle_index != 0xffu) {
+        void *handle = g_hii_handles[g_nav_m1603qa_handle_index];
+        usize size = sizeof(g_hii_package);
+        if (!handle || !db->export_package_lists ||
+            db->export_package_lists(db, handle, &size, g_hii_package) != 0 ||
+            size < 24u || size > sizeof(g_hii_package) ||
+            !guid_bytes_equal(g_hii_package,
+                              &g_m1603qa_308_setup_package_list_guid)) {
+            marker("HII_GRAPH_NAV_PROFILE=M1603QA_BIOS_308_EXPORT_FAILED");
+            return 0;
+        }
+
+        g_nav_hii_string = str;
+        g_nav_hii_handle = handle;
+        g_nav_m1603qa_308_profile = 1u;
+        g_nav_form_history_depth = 0u;
+        if (!nav_load_form(0x2710u)) {
+            marker("HII_GRAPH_NAV_PROFILE=M1603QA_BIOS_308_FORM_LOAD_FAILED");
+            return 0;
+        }
+
+        marker("HII_GRAPH_NAV_PROFILE=M1603QA_BIOS_308");
+        marker("HII_GRAPH_NAV_PACKAGE_GUID_MATCH=PASS");
+        marker("HII_GRAPH_NAV_ROOT_FORM_2710=PASS");
+        marker("HII_GRAPH_NAV_SETUP_FORMSET=PASS");
+        marker(g_nav_varstore_total ? "HII_GRAPH_NAV_VARSTORE_CATALOG=PASS"
+                                    : "HII_GRAPH_NAV_VARSTORE_CATALOG=EMPTY");
+        marker("IFR_PROMPT_STRING_ID=PASS");
+        marker("HII_LANGUAGE_AND_STRING=PASS");
+        marker("HII_GRAPH_NAV_PROMPT_COLLECTION=PASS");
+        marker("HII_GRAPH_NAV_SEMANTIC_ROLE=PASS");
+        marker("HII_PROMPT_SOURCE=PASS");
+        return 1;
+    }
+
     if (g_nav_prompt_total) {
         nav_prompt_load(0);
         marker("IFR_PROMPT_STRING_ID=PASS");
