@@ -50,8 +50,6 @@ int sr_uefi_runtime_tick(sr_uefi_runtime *runtime) {
         (void)sr_voice_stream_pump(
             &runtime->voice, runtime->audio_frame_budget);
         did_work = 1;
-        if (!runtime->voice.active)
-            runtime->screenreader.speech_active = 0;
     }
 
     if (!sr_uefi_keyboard_poll(&runtime->keyboard, &key))
