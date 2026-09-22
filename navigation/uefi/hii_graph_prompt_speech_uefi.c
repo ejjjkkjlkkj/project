@@ -55,7 +55,7 @@ extern const u32 qev_word_pcm_len[];
 #define INVALID_RESP 0xffffffffu
 
 #define QEV_NAV_TEXT_MAX 64u
-#define QEV_SPEECH_CHUNK_MAX 32u
+#define QEV_SPEECH_CHUNK_MAX 64u
 
 #define WIDGET_AUDIO_OUTPUT 0x0
 #define WIDGET_AUDIO_INPUT  0x1
@@ -994,9 +994,9 @@ static int speech_append_pcm8_16k(volatile u8 *pcm, u32 *total_bytes,
 }
 
 static int speech_dma_begin(const char *text, u32 text_count) {
-    if (!g_allocate_pages || !g_stall || !text || !text_count || text_count > 32u) return 0;
-    const u32 pcm_off = 0x1000u;
-    const u32 dma_pages = 2048u;
+    if (!g_allocate_pages || !g_stall || !text || !text_count || text_count > QEV_SPEECH_CHUNK_MAX) return 0;
+    const u32 pcm_off = 0x2000u;
+    const u32 dma_pages = 4096u;
     const u32 dma_bytes = dma_pages * 4096u;
     if (!qev_unit_bank_len || pcm_off >= dma_bytes) return 0;
 
@@ -1007,9 +1007,10 @@ static int speech_dma_begin(const char *text, u32 text_count) {
      * interruption while avoiding one BDL descriptor per allophone and the
      * alignment failures seen with longer HII labels.
      *
-     * Worst-case 32-character French letter-name spelling is about 4.36 MiB
-     * (all 'w'). Reserve 8 MiB and up to 128 BDL entries so VoiceCore v4
-     * full-letter clips also fit for every accepted 32-character label.
+     * Worst-case 64-character French letter-name spelling can exceed 8 MiB.
+     * Reserve 16 MiB and up to 256 BDL entries so a complete semantic phrase
+     * fits in one HDA stream. Avoiding an artificial 32-character split also
+     * prevents zero-LPIB restart failures between adjacent speech chunks.
      * Playback stays interruptible,
      * so the larger worst-case timeout never blocks keyboard focus changes.
      */
@@ -1128,7 +1129,7 @@ static int speech_dma_begin(const char *text, u32 text_count) {
     u32 entries = 0;
     u32 described = 0;
     while (described < dma_payload) {
-        if (entries >= 128u) return 0;
+        if (entries >= 256u) return 0;
         u32 len = dma_payload - described;
         if (len > max_bdl_bytes) len = max_bdl_bytes;
         volatile u8 *e = bdl + entries * 16u;
