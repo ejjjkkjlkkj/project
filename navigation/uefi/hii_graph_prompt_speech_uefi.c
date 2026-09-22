@@ -1573,10 +1573,18 @@ static int nav_live_value_text(void *system_table, u8 prompt_index,
     if (!text_out || !length_out || prompt_index >= g_nav_prompt_total) return 0;
     if (checkbox_state_out) *checkbox_state_out = 0u;
 
+    u8 op = g_nav_prompt_opcodes[prompt_index];
+    if (op == 0x08u) {
+        *text_out = "protected";
+        *length_out = 9u;
+        marker("HII_GRAPH_NAV_LIVE_PASSWORD_REDACTION=PASS");
+        return 1;
+    }
+
     u64 live_value = 0u;
     if (!nav_read_scalar_value(system_table, prompt_index, &live_value)) return 0;
 
-    if (g_nav_prompt_opcodes[prompt_index] == 0x06u) {
+    if (op == 0x06u) {
         if (live_value) {
             *text_out = "checked";
             *length_out = 7u;
