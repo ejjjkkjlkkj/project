@@ -1947,7 +1947,7 @@ static int wait_navigation_keys(void *system_table) {
             if (key.unicode_char == 0x000du) {
                 marker("HII_GRAPH_NAV_KEY=ENTER");
                 u16 target = g_nav_ref_form_ids[g_nav_prompt_index];
-                if (g_nav_hii_handle && target) {
+                if (g_nav_hii_handle && target && target != g_nav_current_form_id) {
                     u16 previous = g_nav_current_form_id;
                     if (g_nav_form_history_depth >= 16u) return 0;
                     g_nav_form_history[g_nav_form_history_depth++] = previous;
@@ -1964,6 +1964,8 @@ static int wait_navigation_keys(void *system_table) {
                     }
                     speak = 1;
                 } else {
+                    if (target == g_nav_current_form_id)
+                        marker("HII_GRAPH_NAV_SELF_REF_ACTION=BLOCKED");
                     marker("HII_GRAPH_NAV_READ_ONLY_ACTION=BLOCKED");
                     speech_override = "read only";
                     speech_override_length = 9u;
