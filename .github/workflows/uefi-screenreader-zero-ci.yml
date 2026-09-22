@@ -44,6 +44,14 @@ jobs:
           ./sr-hii-selftest | tee hii-proof.txt
           grep -F 'UEFI_HII_IFR_MODEL=PASS' hii-proof.txt
 
+      - name: Host HDA graph self-test
+        working-directory: screenreader/uefi
+        run: |
+          set -euo pipefail
+          cc -std=c11 -O2 -Wall -Wextra -Werror             sr_hda_audio.c sr_hda_audio_selftest.c             -o sr-hda-audio-selftest
+          ./sr-hda-audio-selftest | tee hda-proof.txt
+          grep -F 'UEFI_HDA_STATIC=PASS' hda-proof.txt
+
       - name: Host HII Config Routing self-test
         working-directory: screenreader/uefi
         run: |
@@ -95,6 +103,7 @@ jobs:
           clang $flags -c sr_hii_ifr.c -o sr_hii_ifr.obj
           clang $flags -c sr_uefi_hii.c -o sr_uefi_hii.obj
           clang $flags -c sr_uefi_config.c -o sr_uefi_config.obj
+          clang $flags -c sr_hda_audio.c -o sr_hda_audio.obj
           clang $flags -c sr_uefi_input.c -o sr_uefi_input.obj
           clang $flags -c sr_chooser.c -o sr_chooser.obj
           clang $flags -c sr_uefi_runtime.c -o sr_uefi_runtime.obj
@@ -103,6 +112,7 @@ jobs:
           test -s sr_hii_ifr.obj
           test -s sr_uefi_hii.obj
           test -s sr_uefi_config.obj
+          test -s sr_hda_audio.obj
           test -s sr_uefi_input.obj
           test -s sr_chooser.obj
           test -s sr_uefi_runtime.obj
