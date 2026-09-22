@@ -363,6 +363,10 @@ int sr_help(sr_runtime *rt) {
     return sr_emit(rt, "Aucune aide disponible", SR_SPEECH_INFO);
 }
 
+int sr_say(sr_runtime *rt, const char *text, sr_speech_priority priority) {
+    return sr_emit(rt, text, priority);
+}
+
 int sr_where_am_i(sr_runtime *rt) {
     char msg[768];
     sr_u32 used = 0;
