@@ -18,6 +18,7 @@ int sr_uefi_runtime_init(sr_uefi_runtime *runtime,
 
     if (!sr_uefi_keyboard_init(&runtime->keyboard, system_table)) return 0;
     sr_chooser_init(&runtime->chooser);
+    runtime->config = 0;
 
     runtime->activate = activate;
     runtime->activate_ctx = activate_ctx;
@@ -28,6 +29,12 @@ int sr_uefi_runtime_init(sr_uefi_runtime *runtime,
     runtime->commands_seen = 0;
 
     return sr_focus_first(&runtime->screenreader);
+}
+
+void sr_uefi_runtime_bind_config(sr_uefi_runtime *runtime,
+                                 sr_uefi_config *config) {
+    if (!runtime) return;
+    runtime->config = config;
 }
 
 int sr_uefi_runtime_tick(sr_uefi_runtime *runtime) {
@@ -64,6 +71,41 @@ int sr_uefi_runtime_tick(sr_uefi_runtime *runtime) {
 
     if (command == SR_CMD_ITEM_CHOOSER) {
         (void)sr_chooser_open(&runtime->chooser, &runtime->screenreader);
+        return 1;
+    }
+
+    if (command == SR_CMD_VALUE_PREVIOUS || command == SR_CMD_VALUE_NEXT) {
+        if (runtime->config && runtime->screenreader.has_focus) {
+            int direction = command == SR_CMD_VALUE_NEXT ? 1 : -1;
+            if (sr_uefi_config_adjust(
+                    runtime->config,
+                    runtime->screenreader.focus_index,
+                    direction)) {
+                (void)sr_announce_focus(&runtime->screenreader);
+            } else {
+                (void)sr_say(
+                    &runtime->screenreader,
+                    "Modification impossible",
+                    SR_SPEECH_CRITICAL);
+            }
+        }
+        return 1;
+    }
+
+    if (command == SR_CMD_ACTIVATE &&
+        runtime->config &&
+        runtime->screenreader.has_focus &&
+        sr_current(&runtime->screenreader) &&
+        sr_current(&runtime->screenreader)->role == SR_ROLE_CHECKBOX) {
+        if (sr_uefi_config_adjust(
+                runtime->config, runtime->screenreader.focus_index, 1)) {
+            (void)sr_announce_focus(&runtime->screenreader);
+        } else {
+            (void)sr_say(
+                &runtime->screenreader,
+                "Modification impossible",
+                SR_SPEECH_CRITICAL);
+        }
         return 1;
     }
 
