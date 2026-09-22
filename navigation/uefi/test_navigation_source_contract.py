@@ -59,6 +59,7 @@ required = (
     'HII_GRAPH_NAV_LEFT_FALLBACK_MOVE=PASS',
     'HII_GRAPH_NAV_RIGHT_FALLBACK_MOVE=PASS',
     'HII_GRAPH_NAV_SPEECH_INTERRUPT=PASS',
+    'HII_GRAPH_NAV_SPEECH_INTERRUPT_EARLY=PASS',
     'HII_GRAPH_NAV_STRUCTURAL_KEYS=PASS',
     'HII_GRAPH_NAV_FORM_KEYS=PASS',
     'HII_GRAPH_NAV_FORM_ID_TRACKING=PASS',
@@ -312,6 +313,8 @@ ss_end = text.index("static void nav_stage_clear_all", ss_start)
 ss = text[ss_start:ss_end]
 assert "NAV_Q_READ_ONLY" in ss
 assert "HII_GRAPH_NAV_READ_ONLY_PREVIEW=BLOCKED" in ss
+# Numeric (EFI_IFR_NUMERIC, 0x07) must use the same RAM-only staging path.
+assert "g_nav_prompt_opcodes[prompt_index] != 0x07u" in ss
 
 
 
@@ -333,6 +336,8 @@ wait = text[wait_start:wait_end]
 assert "speech_phrase_begin(speech_text, speech_length)" in wait
 assert "speech_phrase_poll(1000u, &progressed)" in wait
 assert "speech_phrase_cancel()" in wait
+assert "HII_GRAPH_NAV_SPEECH_INTERRUPT_EARLY=PASS" in wait
+assert wait.index("HII_GRAPH_NAV_SPEECH_INTERRUPT_EARLY=PASS") < wait.index("nav_build_focus_speech")
 assert "HII_GRAPH_NAV_EXIT=BLOCKED_INCOMPLETE" not in wait
 assert "HII_GRAPH_NAV_DIRECTIONAL_ALIASES=PASS" not in wait
 assert "HII_GRAPH_NAV_SIMPLE_EXIT=PASS" in wait
