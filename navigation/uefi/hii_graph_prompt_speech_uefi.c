@@ -1262,6 +1262,34 @@ static int nav_format_u64(u64 value, char *out, u8 *length_out) {
     return n != 0u;
 }
 
+static int nav_live_value_text(void *system_table, u8 prompt_index,
+                               const char **text_out, u8 *length_out,
+                               u8 *checkbox_state_out) {
+    if (!text_out || !length_out || prompt_index >= g_nav_prompt_total) return 0;
+    if (checkbox_state_out) *checkbox_state_out = 0u;
+
+    u64 live_value = 0u;
+    if (!nav_read_scalar_value(system_table, prompt_index, &live_value)) return 0;
+
+    if (g_nav_prompt_opcodes[prompt_index] == 0x06u) {
+        if (live_value) {
+            *text_out = "checked";
+            *length_out = 7u;
+        } else {
+            *text_out = "not checked";
+            *length_out = 11u;
+        }
+        if (checkbox_state_out) *checkbox_state_out = 1u;
+        return 1;
+    }
+
+    if (nav_option_for_value(prompt_index, live_value, text_out, length_out))
+        return 1;
+
+    return nav_format_u64(live_value, g_nav_value_text, &g_nav_value_length) &&
+           ((*text_out = g_nav_value_text), (*length_out = g_nav_value_length), 1);
+}
+
 static int nav_read_scalar_value(void *system_table, u8 prompt_index,
                                  u64 *value_out) {
     if (!system_table || !value_out || prompt_index >= g_nav_prompt_total) return 0;
@@ -2370,30 +2398,22 @@ static int wait_navigation_keys(void *system_table) {
                 speak_help = 1;
             } else if (key.unicode_char == (u16)'v' || key.unicode_char == (u16)'V') {
                 marker("HII_GRAPH_NAV_KEY=V");
-                u64 live_value = 0u;
-                if (nav_read_scalar_value(system_table, g_nav_prompt_index, &live_value)) {
-                    const char *option_text = 0;
-                    u8 option_length = 0u;
-                    if (nav_option_for_value(g_nav_prompt_index, live_value,
-                                             &option_text, &option_length)) {
-                        speech_override = option_text;
-                        speech_override_length = option_length;
-                        serial_puts("HII_GRAPH_NAV_LIVE_OPTION=");
-                        serial_puts(option_text);
-                        serial_puts("\r\n");
-                        marker("HII_GRAPH_NAV_LIVE_OPTION_MATCH=PASS");
-                    } else if (nav_format_u64(live_value, g_nav_value_text, &g_nav_value_length)) {
-                        speech_override = g_nav_value_text;
-                        speech_override_length = g_nav_value_length;
-                    } else {
-                        speech_override = "no value";
-                        speech_override_length = 8u;
-                    }
-                    serial_puts("HII_GRAPH_NAV_LIVE_VALUE=0x");
-                    serial_hex32((u32)(live_value >> 32));
-                    serial_hex32((u32)live_value);
+                const char *live_text = 0;
+                u8 live_length = 0u;
+                u8 checkbox_state = 0u;
+                if (nav_live_value_text(system_table, g_nav_prompt_index,
+                                        &live_text, &live_length,
+                                        &checkbox_state)) {
+                    speech_override = live_text;
+                    speech_override_length = live_length;
+                    serial_puts("HII_GRAPH_NAV_LIVE_TEXT=");
+                    serial_puts(live_text);
                     serial_puts("\r\n");
                     marker("HII_GRAPH_NAV_LIVE_VALUE_READ=PASS");
+                    if (checkbox_state)
+                        marker("HII_GRAPH_NAV_CHECKBOX_STATE=PASS");
+                    else if (g_nav_prompt_opcodes[g_nav_prompt_index] == 0x05u)
+                        marker("HII_GRAPH_NAV_LIVE_OPTION_MATCH=PASS");
                 } else {
                     speech_override = "no value";
                     speech_override_length = 8u;
