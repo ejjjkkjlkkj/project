@@ -5,6 +5,7 @@
 #include "sr_keymap.h"
 #include "sr_voice_stream.h"
 #include "sr_uefi_input.h"
+#include "sr_chooser.h"
 
 typedef int (*sr_activate_fn)(void *ctx, const sr_node *node);
 
@@ -12,6 +13,7 @@ typedef struct {
     sr_runtime screenreader;
     sr_voice_stream voice;
     sr_uefi_keyboard keyboard;
+    sr_chooser chooser;
     sr_activate_fn activate;
     void *activate_ctx;
     sr_u32 audio_frame_budget;
