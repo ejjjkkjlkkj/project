@@ -156,11 +156,16 @@ static u32 g_prompt_count;
 static char g_nav_prompts[MAX_HII_NAV_PROMPTS][33];
 static u8 g_nav_prompt_lengths[MAX_HII_NAV_PROMPTS];
 static u8 g_nav_prompt_opcodes[MAX_HII_NAV_PROMPTS];
+static char g_nav_help[MAX_HII_NAV_PROMPTS][33];
+static u8 g_nav_help_lengths[MAX_HII_NAV_PROMPTS];
 static u8 g_nav_prompt_total;
 static u8 g_nav_prompt_index;
 static u8 g_nav_prompt_opcode;
 static char g_nav_speech_text[33];
 static u8 g_nav_speech_length;
+static char g_nav_help_text[33];
+static u8 g_nav_help_length;
+static u8 g_nav_help_available;
 static u8 g_nav_event_mask;
 static u8 g_nav_speech_events;
 static u8 g_nav_realtime_events;
@@ -374,6 +379,9 @@ static int persist_boot_proof(void *image_handle, void *boot_services,
          g_nav_speech_events >= 7u) ? "PASS\r\n" : "NOT_ESTABLISHED\r\n");
     proof_puts(proof,sizeof(proof),&n,"HII_GRAPH_NAV_EXIT=PASS\r\n");
     proof_puts(proof,sizeof(proof),&n,"HII_GRAPH_NAV_SEMANTIC_ROLE=PASS\r\n");
+    proof_puts(proof,sizeof(proof),&n,"HII_GRAPH_NAV_CONTEXT_HELP=");
+    proof_puts(proof,sizeof(proof),&n,
+        g_nav_help_available ? "PASS\r\n" : "NOT_AVAILABLE\r\n");
     proof_puts(proof,sizeof(proof),&n,"HII_GRAPH_NAV_SPEECH_EVENTS=0x");
     proof_hex8(proof,sizeof(proof),&n,g_nav_speech_events);
     proof_puts(proof,sizeof(proof),&n,"\r\n");
@@ -1082,14 +1090,21 @@ static int get_hii_string(hii_string_protocol *str, void *handle, u16 token, cha
 }
 
 #ifdef QEV_INTERACTIVE_NAV
-static int nav_prompt_add(u8 opcode, const char *text, u32 count) {
-    if (!text || !count || count > 32u) return 0;
+static int nav_prompt_add(u8 opcode, const char *text, u32 count,
+                          const char *help, u32 help_count) {
+    if (!text || !count || count > 32u || help_count > 32u) return 0;
     for (u8 i = 0; i < g_nav_prompt_total; ++i) {
         if (g_nav_prompt_lengths[i] != (u8)count ||
-            g_nav_prompt_opcodes[i] != opcode) continue;
+            g_nav_prompt_opcodes[i] != opcode ||
+            g_nav_help_lengths[i] != (u8)help_count) continue;
         u32 same = 1;
         for (u32 j = 0; j < count; ++j) {
             if (g_nav_prompts[i][j] != text[j]) { same = 0; break; }
+        }
+        if (same) {
+            for (u32 j = 0; j < help_count; ++j) {
+                if (g_nav_help[i][j] != help[j]) { same = 0; break; }
+            }
         }
         if (same) return 0;
     }
@@ -1099,9 +1114,12 @@ static int nav_prompt_add(u8 opcode, const char *text, u32 count) {
     g_nav_prompts[slot][count] = 0;
     g_nav_prompt_lengths[slot] = (u8)count;
     g_nav_prompt_opcodes[slot] = opcode;
+    for (u32 j = 0; j < help_count; ++j) g_nav_help[slot][j] = help[j];
+    g_nav_help[slot][help_count] = 0;
+    g_nav_help_lengths[slot] = (u8)help_count;
+    if (help_count) g_nav_help_available = 1u;
     return 1;
 }
-
 static void nav_prompt_load(u8 index) {
     if (index >= g_nav_prompt_total) return;
     g_nav_prompt_index = index;
@@ -1120,6 +1138,11 @@ static void nav_prompt_load(u8 index) {
         g_nav_speech_text[n++] = g_prompt_text[j];
     g_nav_speech_text[n] = 0;
     g_nav_speech_length = (u8)n;
+
+    g_nav_help_length = g_nav_help_lengths[index];
+    for (u32 j = 0; j < g_nav_help_length; ++j)
+        g_nav_help_text[j] = g_nav_help[index][j];
+    g_nav_help_text[g_nav_help_length] = 0;
 }
 #endif
 
@@ -1144,6 +1167,7 @@ static int resolve_hii_prompt(void *system_table) {
 #ifdef QEV_INTERACTIVE_NAV
     g_nav_prompt_total = 0;
     g_nav_prompt_index = 0;
+    g_nav_help_available = 0;
     g_nav_event_mask = 0;
     g_nav_speech_events = 0;
     g_nav_realtime_events = 0;
@@ -1178,9 +1202,15 @@ static int resolve_hii_prompt(void *system_table) {
                         u16 token = rd16(q + 2);
 #ifdef QEV_INTERACTIVE_NAV
                         char candidate[33];
+                        char help_candidate[33];
                         u32 candidate_count = 0;
+                        u32 help_count = 0;
+                        u16 help_token = oplen >= 6u ? rd16(q + 4) : 0u;
+                        if (help_token)
+                            (void)get_hii_string(str, handle, help_token, help_candidate, &help_count);
                         if (token && get_hii_string(str, handle, token, candidate, &candidate_count)) {
-                            nav_prompt_add(op, candidate, candidate_count);
+                            nav_prompt_add(op, candidate, candidate_count,
+                                           help_candidate, help_count);
                         }
 #else
                         if (token && get_hii_string(str, handle, token, g_prompt_text, &g_prompt_count)) {
@@ -1207,6 +1237,8 @@ static int resolve_hii_prompt(void *system_table) {
         marker("HII_LANGUAGE_AND_STRING=PASS");
         marker("HII_GRAPH_NAV_PROMPT_COLLECTION=PASS");
         marker("HII_GRAPH_NAV_SEMANTIC_ROLE=PASS");
+        marker(g_nav_help_available ? "HII_GRAPH_NAV_CONTEXT_HELP=PASS"
+                                    : "HII_GRAPH_NAV_CONTEXT_HELP=NOT_AVAILABLE");
         serial_puts("HII_GRAPH_NAV_ROLE=");
         serial_puts(ifr_semantic_role(g_nav_prompt_opcode));
         serial_puts("\r\n");
@@ -1492,6 +1524,7 @@ static int wait_navigation_keys(void *system_table) {
         u64 st = conin->read_key(conin, &key);
         if (st == 0) {
             u8 speak = 0;
+            u8 speak_help = 0;
             if (key.unicode_char == 0x001bu || key.scan_code == 0x0017u) {
                 marker("HII_GRAPH_NAV_KEY=ESC");
                 speech_dma_stop();
@@ -1505,7 +1538,11 @@ static int wait_navigation_keys(void *system_table) {
                 marker("HII_GRAPH_NAV_EXIT=PASS");
                 return 1;
             }
-            if (key.unicode_char == (u16)'r' || key.unicode_char == (u16)'R') {
+            if (key.unicode_char == (u16)'h' || key.unicode_char == (u16)'H') {
+                marker("HII_GRAPH_NAV_KEY=H");
+                speak = 1;
+                speak_help = 1;
+            } else if (key.unicode_char == (u16)'r' || key.unicode_char == (u16)'R') {
                 marker("HII_GRAPH_NAV_KEY=R");
                 g_nav_event_mask |= NAV_SEEN_R;
                 speak = 1;
@@ -1570,6 +1607,18 @@ static int wait_navigation_keys(void *system_table) {
             }
 
             if (speak) {
+                const char *speech_text = g_nav_speech_text;
+                u8 speech_length = g_nav_speech_length;
+                if (speak_help) {
+                    if (g_nav_help_length) {
+                        speech_text = g_nav_help_text;
+                        speech_length = g_nav_help_length;
+                    } else {
+                        speech_text = "no help";
+                        speech_length = 7u;
+                    }
+                }
+
                 serial_puts("HII_GRAPH_NAV_INDEX=0x");
                 serial_hex8(g_nav_prompt_index);
                 serial_puts("\r\n");
@@ -1580,16 +1629,19 @@ static int wait_navigation_keys(void *system_table) {
                 serial_puts(ifr_semantic_role(g_nav_prompt_opcode));
                 serial_puts("\r\n");
                 serial_puts("HII_GRAPH_NAV_SPEECH_TEXT=");
-                serial_puts(g_nav_speech_text);
+                serial_puts(speech_text);
                 serial_puts("\r\n");
                 marker("HII_GRAPH_NAV_SEMANTIC_ROLE=PASS");
+                if (speak_help)
+                    marker(g_nav_help_length ? "HII_GRAPH_NAV_CONTEXT_HELP_SPEECH=PASS"
+                                             : "HII_GRAPH_NAV_CONTEXT_HELP_SPEECH=NO_HELP");
 
                 if (g_speech_active) {
                     speech_dma_stop();
                     if (g_nav_speech_interruptions != 0xffu) ++g_nav_speech_interruptions;
                     marker("HII_GRAPH_NAV_SPEECH_INTERRUPT=PASS");
                 }
-                if (!speech_dma_begin(g_nav_speech_text, g_nav_speech_length)) return 0;
+                if (!speech_dma_begin(speech_text, speech_length)) return 0;
 
                 if (g_nav_speech_events != 0xffu) ++g_nav_speech_events;
                 if (g_nav_realtime_events != 0xffu) ++g_nav_realtime_events;
