@@ -8,8 +8,8 @@ sr_command sr_key_to_command(sr_key key) {
     switch (key.scan_code) {
         case 0x0001u: return SR_CMD_PREVIOUS;      /* Up */
         case 0x0002u: return SR_CMD_NEXT;          /* Down */
-        case 0x0003u: return SR_CMD_PREVIOUS;      /* Right/Left firmware aliases */
-        case 0x0004u: return SR_CMD_NEXT;
+        case 0x0003u: return SR_CMD_VALUE_NEXT;   /* Right */
+        case 0x0004u: return SR_CMD_VALUE_PREVIOUS;/* Left */
         case 0x0005u: return SR_CMD_FIRST;         /* Home */
         case 0x0006u: return SR_CMD_LAST;          /* End */
         case 0x0009u: return SR_CMD_PAGE_PREVIOUS; /* Page Up */
