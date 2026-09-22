@@ -67,6 +67,62 @@ static char *h_store(sr_hii_model *model, const char *text) {
     return dst;
 }
 
+static char *h_store_ascii_n(sr_hii_model *model,
+                             const sr_u8 *text,
+                             sr_u32 max_bytes) {
+    char tmp[128];
+    sr_u32 n = 0;
+    if (!model || !text) return 0;
+    while (n < max_bytes && n + 1u < (sr_u32)sizeof(tmp) && text[n]) {
+        tmp[n] = (char)text[n];
+        ++n;
+    }
+    if (!n || (n == max_bytes && text[n - 1u] != 0)) return 0;
+    tmp[n] = 0;
+    return h_store(model, tmp);
+}
+
+static void h_add_varstore(sr_hii_model *model,
+                           const sr_u8 *p,
+                           sr_u32 op_len) {
+    sr_hii_varstore *store;
+    sr_u32 i;
+    if (!model || !model->varstores ||
+        model->varstore_count >= model->varstore_capacity) return;
+
+    /* EFI_IFR_VARSTORE: Header + Guid + VarStoreId + Size + CHAR8 Name[]. */
+    if (p[0] == 0x24u) {
+        if (op_len < 23u) return;
+        store = &model->varstores[model->varstore_count];
+        for (i = 0; i < 16u; ++i) store->guid[i] = p[2u + i];
+        store->id = h_rd16(p + 18u);
+        store->size = h_rd16(p + 20u);
+        store->attributes = 0;
+        store->opcode = 0x24u;
+        store->name = h_store_ascii_n(model, p + 22u, op_len - 22u);
+        if (!store->id || !store->size || !store->name) return;
+        model->varstore_count++;
+        return;
+    }
+
+    /* EFI_IFR_VARSTORE_EFI: retained for metadata; generic routing below
+       intentionally writes only Buffer Storage (0x24). */
+    if (p[0] == 0x26u) {
+        if (op_len < 26u) return;
+        store = &model->varstores[model->varstore_count];
+        for (i = 0; i < 16u; ++i) store->guid[i] = p[4u + i];
+        store->id = h_rd16(p + 2u);
+        store->attributes =
+            (sr_u32)p[20u] | ((sr_u32)p[21u] << 8) |
+            ((sr_u32)p[22u] << 16) | ((sr_u32)p[23u] << 24);
+        store->size = h_rd16(p + 24u);
+        store->opcode = 0x26u;
+        store->name = "";
+        if (!store->id || !store->size) return;
+        model->varstore_count++;
+    }
+}
+
 static char *h_resolve_store(sr_hii_model *model, sr_u16 id) {
     char tmp[256];
     if (!id || !model || !model->resolve_string) return 0;
@@ -210,6 +266,9 @@ void sr_hii_model_init(sr_hii_model *model,
     model->options = 0;
     model->option_capacity = 0;
     model->option_count = 0;
+    model->varstores = 0;
+    model->varstore_capacity = 0;
+    model->varstore_count = 0;
     model->malformed_opcodes = 0;
     model->dropped_nodes = 0;
 }
@@ -231,6 +290,26 @@ void sr_hii_model_attach_metadata(sr_hii_model *model,
         for (i = 0; i < binding_capacity; ++i)
             h_clear_binding(&bindings[i]);
     }
+}
+
+void sr_hii_model_attach_varstores(sr_hii_model *model,
+                                   sr_hii_varstore *varstores,
+                                   sr_u32 varstore_capacity) {
+    if (!model) return;
+    model->varstores = varstores;
+    model->varstore_capacity = varstore_capacity;
+    model->varstore_count = 0;
+}
+
+const sr_hii_varstore *sr_hii_find_varstore(const sr_hii_model *model,
+                                             sr_u16 varstore_id) {
+    sr_u32 i;
+    if (!model || !model->varstores || !varstore_id) return 0;
+    for (i = 0; i < model->varstore_count; ++i) {
+        if (model->varstores[i].id == varstore_id)
+            return &model->varstores[i];
+    }
+    return 0;
 }
 
 int sr_hii_parse_forms_package(sr_hii_model *model,
@@ -278,6 +357,9 @@ int sr_hii_parse_forms_package(sr_hii_model *model,
             p += op_len;
             continue;
         }
+
+        if (op == 0x24u || op == 0x26u)
+            h_add_varstore(model, p, op_len);
 
         if (op == SR_IFR_ONE_OF_OPTION && oneof_count) {
             sr_u32 owner = h_oneof_child(
