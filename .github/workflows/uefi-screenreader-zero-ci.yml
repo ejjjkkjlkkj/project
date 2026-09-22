@@ -1,0 +1,128 @@
+name: uefi-screenreader-zero-ci
+
+on:
+  push:
+    branches:
+      - uefi-screenreader-zero-20260922
+    paths:
+      - 'screenreader/**'
+      - '.github/workflows/uefi-screenreader-zero-ci.yml'
+  pull_request:
+    paths:
+      - 'screenreader/**'
+      - '.github/workflows/uefi-screenreader-zero-ci.yml'
+  workflow_dispatch:
+
+jobs:
+  core:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Host semantic navigation self-test
+        working-directory: screenreader/uefi
+        run: |
+          set -euo pipefail
+          cc -std=c11 -O2 -Wall -Wextra -Werror             sr_core.c sr_keymap.c sr_selftest.c             -o sr-selftest
+          ./sr-selftest | tee core-proof.txt
+          grep -F 'UEFI_SCREENREADER_CORE=PASS' core-proof.txt
+
+      - name: Host voice streaming self-test
+        working-directory: screenreader/uefi
+        run: |
+          set -euo pipefail
+          cc -std=c11 -O2 -Wall -Wextra -Werror             sr_voice_stream.c sr_voice_selftest.c             -o sr-voice-selftest
+          ./sr-voice-selftest | tee voice-proof.txt
+          grep -F 'UEFI_VOICE_STREAM=PASS' voice-proof.txt
+
+      - name: Host HII IFR parser self-test
+        working-directory: screenreader/uefi
+        run: |
+          set -euo pipefail
+          cc -std=c11 -O2 -Wall -Wextra -Werror             sr_hii_ifr.c sr_hii_selftest.c             -o sr-hii-selftest
+          ./sr-hii-selftest | tee hii-proof.txt
+          grep -F 'UEFI_HII_IFR_MODEL=PASS' hii-proof.txt
+
+      - name: Host HDA graph self-test
+        working-directory: screenreader/uefi
+        run: |
+          set -euo pipefail
+          cc -std=c11 -O2 -Wall -Wextra -Werror             sr_hda_audio.c sr_hda_audio_selftest.c             -o sr-hda-audio-selftest
+          ./sr-hda-audio-selftest | tee hda-proof.txt
+          grep -F 'UEFI_HDA_STATIC=PASS' hda-proof.txt
+
+      - name: Host HII Config Routing self-test
+        working-directory: screenreader/uefi
+        run: |
+          set -euo pipefail
+          cc -std=c11 -O2 -Wall -Wextra -Werror             sr_hii_ifr.c sr_uefi_config.c sr_uefi_config_selftest.c             -o sr-uefi-config-selftest
+          ./sr-uefi-config-selftest | tee uefi-config-proof.txt
+          grep -F 'UEFI_CONFIG_ROUTING=PASS' uefi-config-proof.txt
+
+      - name: Host HII semantic value self-test
+        working-directory: screenreader/uefi
+        run: |
+          set -euo pipefail
+          cc -std=c11 -O2 -Wall -Wextra -Werror             sr_hii_ifr.c sr_hii_value_selftest.c             -o sr-hii-value-selftest
+          ./sr-hii-value-selftest | tee hii-value-proof.txt
+          grep -F 'UEFI_HII_SEMANTIC_VALUES=PASS' hii-value-proof.txt
+
+      - name: Host item chooser self-test
+        working-directory: screenreader/uefi
+        run: |
+          set -euo pipefail
+          cc -std=c11 -O2 -Wall -Wextra -Werror             sr_core.c sr_keymap.c sr_chooser.c sr_chooser_selftest.c             -o sr-chooser-selftest
+          ./sr-chooser-selftest | tee chooser-proof.txt
+          grep -F 'UEFI_ITEM_CHOOSER=PASS' chooser-proof.txt
+
+      - name: Host native UEFI HII collector self-test
+        working-directory: screenreader/uefi
+        run: |
+          set -euo pipefail
+          cc -std=c11 -O2 -Wall -Wextra -Werror             sr_hii_ifr.c sr_uefi_hii.c sr_uefi_hii_selftest.c             -o sr-uefi-hii-selftest
+          ./sr-uefi-hii-selftest | tee uefi-hii-proof.txt
+          grep -F 'UEFI_HII_COLLECTOR=PASS' uefi-hii-proof.txt
+
+      - name: Validate quality voice bank packer
+        working-directory: screenreader/uefi
+        run: |
+          set -euo pipefail
+          python -m py_compile pack_voice_bank.py test_pack_voice_bank.py
+          python test_pack_voice_bank.py | tee voice-packer-proof.txt
+          grep -F 'UEFI_QUALITY_VOICE_PACKER_TEST=PASS' voice-packer-proof.txt
+
+      - name: Freestanding x64 compile
+        working-directory: screenreader/uefi
+        run: |
+          set -euo pipefail
+          flags='--target=x86_64-pc-windows-msvc -std=c11 -ffreestanding -fshort-wchar -fno-stack-protector -fno-builtin -mno-red-zone -O2 -Wall -Wextra -Werror'
+          clang $flags -c sr_core.c -o sr_core.obj
+          clang $flags -c sr_keymap.c -o sr_keymap.obj
+          clang $flags -c sr_voice_stream.c -o sr_voice_stream.obj
+          clang $flags -c sr_hii_ifr.c -o sr_hii_ifr.obj
+          clang $flags -c sr_uefi_hii.c -o sr_uefi_hii.obj
+          clang $flags -c sr_uefi_config.c -o sr_uefi_config.obj
+          clang $flags -c sr_hda_audio.c -o sr_hda_audio.obj
+          clang $flags -c sr_uefi_input.c -o sr_uefi_input.obj
+          clang $flags -c sr_chooser.c -o sr_chooser.obj
+          clang $flags -c sr_uefi_runtime.c -o sr_uefi_runtime.obj
+          test -s sr_core.obj
+          test -s sr_voice_stream.obj
+          test -s sr_hii_ifr.obj
+          test -s sr_uefi_hii.obj
+          test -s sr_uefi_config.obj
+          test -s sr_hda_audio.obj
+          test -s sr_uefi_input.obj
+          test -s sr_chooser.obj
+          test -s sr_uefi_runtime.obj
+          echo UEFI_FREESTANDING_OBJECTS=PASS
+
+      - name: Upload proofs
+        uses: actions/upload-artifact@v4
+        with:
+          name: uefi-screenreader-zero-proof
+          path: |
+            screenreader/uefi/*-proof.txt
+            screenreader/uefi/*.obj
+          if-no-files-found: error
