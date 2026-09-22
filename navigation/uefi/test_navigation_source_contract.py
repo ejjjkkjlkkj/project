@@ -14,6 +14,8 @@ required = (
     'HII_GRAPH_SPEECH_WORD_PRONUNCIATION=PASS',
     'HII_GRAPH_SPEECH_WORD_FALLBACK=LETTER_NAMES',
     'HII_GRAPH_SPEECH_UNKNOWN_WORD_FALLBACK=PASS',
+    'HII_GRAPH_SPEECH_SPOKEN_SPELLING_CLIP=PASS',
+    'HII_GRAPH_SPEECH_NO_TONAL_FALLBACK=PASS',
     'speech_lookup_word',
     'qev_word_count',
     'qev_word_name_stride',
@@ -27,6 +29,14 @@ required = (
     'qev_word_pcm_rate_hz',
     'qev_word_pcm_off',
     'qev_word_pcm_len',
+    'qev_letter_pcm_bank',
+    'qev_letter_pcm_bank_len',
+    'qev_letter_pcm_off',
+    'qev_letter_pcm_len',
+    'qev_digit_pcm_bank',
+    'qev_digit_pcm_bank_len',
+    'qev_digit_pcm_off',
+    'qev_digit_pcm_len',
     'speech_append_pcm8_16k',
     'HII_GRAPH_SPEECH_WHOLE_WORD_CLIP=PASS',
     'HII_GRAPH_SPEECH_VOICECORE_WORD_MODE=PASS',
@@ -367,13 +377,14 @@ assert "speech_phrase_begin" in run and "speech_phrase_poll" in run
 
 
 # Common-word pronunciation must be attempted only at word boundaries and
-# unknown words must retain the proven letter-name fallback.
+# unknown words must use spoken VoiceCore letter/digit clips, never tonal allophones.
 sd_start = text.index("static int speech_dma_begin")
 sd_end = text.index("static int speech_dma_poll", sd_start)
 sd = text[sd_start:sd_end]
 assert "speech_lookup_word(text + i, word_length" in sd
 assert "(i == 0u || text[i - 1u] == ' ')" in sd
-assert "qev_letter_unit_count" in sd and "qev_digit_unit_count" in sd
-assert sd.index("speech_lookup_word(text + i, word_length") < sd.index("qev_letter_unit_count")
+assert "qev_letter_pcm_off" in sd and "qev_digit_pcm_off" in sd
+assert "HII_GRAPH_SPEECH_SPOKEN_SPELLING_CLIP=PASS" in sd
+assert sd.index("speech_lookup_word(text + i, word_length") < sd.index("qev_letter_pcm_off")
 
 print("SCREEN_READER_NAVIGATION_SOURCE_CONTRACT=PASS")
