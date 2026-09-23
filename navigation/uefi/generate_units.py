@@ -265,10 +265,8 @@ def _condition_external_pcm(mono, rate):
     # crackle after mu-law companding and the 24 -> 48 kHz interpolation.
     peak=max(abs(x) for x in mono)
     target_peak=26000
-    if 0 < peak < target_peak:
+    if peak > 0 and peak != target_peak:
         mono=[max(-32768,min(32767,(x*target_peak)//peak)) for x in mono]
-    elif peak > target_peak:
-        mono=[max(-target_peak,min(target_peak,x)) for x in mono]
 
     # Soft gate only the sub-audible residual floor. The transition band avoids
     # hard discontinuities that would themselves create clicks.
