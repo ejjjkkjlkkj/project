@@ -26,6 +26,9 @@ $identity = [Security.Principal.WindowsIdentity]::GetCurrent().Name
 if ($identity -ne 'NT AUTHORITY\SYSTEM') {
   throw "This stage must run through PsExec as SYSTEM. Current identity: $identity"
 }
+$psExecPath = Resolve-RequiredFile @(
+  'C:\Users\adm\Downloads\PsExec64.exe'
+) 'Required PsExec64'
 
 $Workspace = (Resolve-Path -LiteralPath $Workspace).Path
 Set-Location -LiteralPath $Workspace
@@ -84,6 +87,7 @@ if (Test-Path $voiceDir) { Remove-Item -Recurse -Force $voiceDir }
 New-Item -ItemType Directory -Force -Path $voiceDir | Out-Null
 
 Write-Host "PSEXEC_SYSTEM_IDENTITY=PASS"
+Write-Host "PSEXEC64_PATH=$psExecPath"
 Write-Host "HOST_ASUS_M1603QA=PASS"
 Write-Host "HOST_RYZEN_5800H=PASS"
 Write-Host "PSEXEC_IDENTITY=$identity"
@@ -106,7 +110,7 @@ $voiceText = Get-Content -Raw -LiteralPath $voiceEvidence
 if ($voiceText -notmatch 'SYSTEM_SPEECH_FR_NATIVE=True') {
   throw "No native French System.Speech voice is visible under LocalSystem"
 }
-if ($voiceText -notmatch 'SYSTEM_SPEECH_OUTPUT_RATE=16000' -or
+if ($voiceText -notmatch 'SYSTEM_SPEECH_OUTPUT_RATE=24000' -or
     $voiceText -notmatch 'SYSTEM_SPEECH_OUTPUT_BITS=16' -or
     $voiceText -notmatch 'SYSTEM_SPEECH_OUTPUT_CHANNELS=1' -or
     $voiceText -notmatch 'SYSTEM_SPEECH_OUTPUT_ENCODING=PCM') {
@@ -284,6 +288,7 @@ $evidenceFile = Join-Path $voiceDir 'system-voice-evidence.txt'
 $summaryFile = Join-Path $buildDir 'psexec-physical-summary.txt'
 $summary = @(
   'PSEXEC_REQUIRED=PASS',
+  "PSEXEC64_PATH=$psExecPath",
   "IDENTITY=$identity",
   'REAL_WINDOWS_VOICE_BUILD=PASS',
   'VOICE_CODEC_ROUNDTRIP=PASS',
