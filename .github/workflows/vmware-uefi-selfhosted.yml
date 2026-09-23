@@ -1,6 +1,11 @@
 name: vmware-uefi-selfhosted-psexec
 
 on:
+  pull_request:
+    paths:
+      - 'voice/**'
+      - 'navigation/**'
+      - '.github/workflows/vmware-uefi-selfhosted.yml'
   workflow_dispatch:
 
 permissions:
@@ -67,6 +72,23 @@ jobs:
 
           if (-not (Test-Path 'build\psexec-physical-summary.txt')) {
             throw "PsExec summary evidence missing"
+          }
+          $summary = Get-Content -Raw 'build\psexec-physical-summary.txt'
+          foreach ($required in @(
+            'PSEXEC_REQUIRED=PASS',
+            'PSEXEC64_PATH=C:\Users\adm\Downloads\PsExec64.exe',
+            'IDENTITY_SID=S-1-5-18',
+            'REAL_WINDOWS_VOICE_BUILD=PASS',
+            'REAL_WINDOWS_VOICE_BANK_COMPLETE=PASS',
+            'VOICE_CODEC_ROUNDTRIP=PASS',
+            'NAVIGATION_EFI_REAL_VOICE_BUILD=PASS',
+            'VMWARE_UEFI_BOOT=PASS',
+            'VMWARE_SCREENREADER_DISCOVERY=PASS',
+            'SYSTEM_SPEECH_OUTPUT_RATE=24000'
+          )) {
+            if ($summary -notmatch [regex]::Escape($required)) {
+              throw "Missing PsExec physical proof marker: $required"
+            }
           }
           Get-Content 'build\psexec-physical-summary.txt'
           Write-Host 'WINDOWS_PROJECT_EXECUTION_VIA_PSEXEC=PASS'
