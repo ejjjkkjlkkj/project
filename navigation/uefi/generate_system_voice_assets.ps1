@@ -77,7 +77,7 @@ $voiceEvidence = @(
   "SYSTEM_SPEECH_EN_GENDER=$($en.VoiceInfo.Gender)"
   "SYSTEM_SPEECH_EN_NATIVE=$([bool]$enNative)"
   "SYSTEM_SPEECH_VOICES=$voiceInventory"
-  "SYSTEM_SPEECH_OUTPUT_RATE=16000"
+  "SYSTEM_SPEECH_OUTPUT_RATE=24000"
   "SYSTEM_SPEECH_OUTPUT_BITS=16"
   "SYSTEM_SPEECH_OUTPUT_CHANNELS=1"
   "SYSTEM_SPEECH_OUTPUT_ENCODING=PCM"
@@ -91,13 +91,13 @@ function Write-VoiceWav([string]$FileName, [string]$Text, [string]$VoiceName, [i
   try {
     $synth.SelectVoice($VoiceName)
     $synth.Rate = [Math]::Max(-2, [Math]::Min(2, $Rate))
-    $synth.Volume = 100
+    $synth.Volume = 92
 
-    # UEFI v12 quality contract: make SAPI emit exactly the format embedded by
-    # the firmware bank. This avoids an extra host-side sample-rate conversion,
-    # which was adding aliasing to consonants before G.711 mu-law encoding.
+    # UEFI clean-voice contract: make SAPI emit the exact 24 kHz format embedded
+    # by the firmware bank. The 24 kHz source halves cleanly into the 48 kHz HDA
+    # stream and preserves substantially more consonant detail than 16 kHz.
     $format = [System.Speech.AudioFormat.SpeechAudioFormatInfo]::new(
-      16000,
+      24000,
       [System.Speech.AudioFormat.AudioBitsPerSample]::Sixteen,
       [System.Speech.AudioFormat.AudioChannel]::Mono
     )
