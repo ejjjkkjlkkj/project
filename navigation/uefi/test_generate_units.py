@@ -4,7 +4,8 @@ from __future__ import annotations
 from generate_units import (
     DIGIT_UNITS, LETTER_UNITS, WORD_NAME_STRIDE, WORD_UNIT_STRIDE,
     WORD_UNITS, PHRASE_TEXTS, SOURCE_RATE, convert, load_source, make_source_units,
-    _phrase_unit_name, _condition_external_pcm,
+    _phrase_unit_name, _condition_external_pcm, _active_word_units,
+    EXTERNAL_WORD_PRIORITY,
 )
 
 MAX_BANK_BYTES = 128 * 4096 - 0x1000
@@ -36,6 +37,13 @@ def main() -> None:
     assert max(map(len, WORD_UNITS)) < WORD_NAME_STRIDE
     assert max(map(len, WORD_UNITS.values())) <= WORD_UNIT_STRIDE
     assert all(word.isascii() and word.islower() for word in WORD_UNITS)
+
+    physical_words = _active_word_units(True)
+    assert set(physical_words) == set(WORD_UNITS)
+    for word in EXTERNAL_WORD_PRIORITY:
+        assert physical_words[word] == (f"word_{word}",)
+    for word in set(WORD_UNITS) - set(EXTERNAL_WORD_PRIORITY):
+        assert physical_words[word] == tuple(f"letter_{ch}" for ch in word)
     assert len(PHRASE_TEXTS) >= 6
     assert "ready press f1 for help" in PHRASE_TEXTS
     assert "no change" in PHRASE_TEXTS
