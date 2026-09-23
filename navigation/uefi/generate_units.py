@@ -320,22 +320,35 @@ def _wav_to_mulaw_source_rate(path: Path) -> bytes:
     mono=_condition_external_pcm(mono, rate)
     return bytes(_linear_to_mulaw(x) for x in mono)
 
+EXTERNAL_WORD_PRIORITY=(
+    'boot','bios','security','secure','configuration','settings','system','device',
+    'storage','network','password','save','exit','enabled','disabled','advanced',
+    'main','setup','usb','nvme','tpm','cpu','memory','processor','recovery',
+    'restore','default','option','value','enter','escape','help','up','down',
+    'left','right','change','action','checked','back','button',
+)
+
 def _external_unit_order(names):
     phrases=[_phrase_unit_name(i) for i in range(len(PHRASE_TEXTS))]
     letters=[f'letter_{ch}' for ch in 'abcdefghijklmnopqrstuvwxyz']
     digits=[f'digit_{ch}' for ch in '0123456789']
-    words=[
-        'word_boot','word_bios','word_security','word_secure','word_configuration',
-        'word_settings','word_system','word_device','word_storage','word_network',
-        'word_password','word_save','word_exit','word_enabled','word_disabled',
-        'word_advanced','word_main','word_setup','word_usb','word_nvme','word_tpm',
-        'word_cpu','word_memory','word_processor','word_recovery','word_restore',
-        'word_default','word_option','word_value','word_enter','word_escape',
-        'word_help','word_up','word_down','word_left','word_right','word_change',
-        'word_action','word_checked','word_back','word_button',
-    ]
+    words=[f'word_{word}' for word in EXTERNAL_WORD_PRIORITY]
     ordered=phrases+letters+digits+words
     return [n for n in ordered if n in names]
+
+def _active_word_units(external_voice):
+    if not external_voice:
+        return WORD_UNITS
+    preferred=set(EXTERNAL_WORD_PRIORITY)
+    # In physical builds reserve the finite firmware bank for actual Windows
+    # speech clips. Non-priority firmware words stay accessible through the
+    # already-proven French letter-name units instead of consuming hundreds of
+    # KiB of duplicate VoiceCore word audio.
+    return {
+        word: ((f'word_{word}',) if word in preferred
+               else tuple(f'letter_{ch}' for ch in word))
+        for word in WORD_UNITS
+    }
 
 def apply_external_voice_units(units, names):
     root=os.environ.get('QEV_EXTERNAL_VOICE_DIR','').strip()
@@ -423,11 +436,13 @@ def main():
     speech=load_source()
     if speech.SAMPLE_RATE != 48000:
         raise SystemExit(f'VoiceCore v4 unexpected render rate: {speech.SAMPLE_RATE}')
+    external_voice=bool(os.environ.get('QEV_EXTERNAL_VOICE_DIR','').strip())
+    active_word_units=_active_word_units(external_voice)
     names=sorted(
         {'sil'}
         | {u for seq in LETTER_UNITS.values() for u in seq}
         | {u for seq in DIGIT_UNITS.values() for u in seq}
-        | {u for seq in WORD_UNITS.values() for u in seq}
+        | {u for seq in active_word_units.values() for u in seq}
         | {_phrase_unit_name(i) for i in range(len(PHRASE_TEXTS))}
     )
     source_units=make_source_units(speech)
@@ -458,12 +473,12 @@ def main():
         row=[index[u] for u in seq] + [0]*(8-len(seq))
         digit_flat.extend(row)
 
-    word_names=sorted(WORD_UNITS)
+    word_names=sorted(active_word_units)
     word_name_lens=[]; word_name_flat=[]
     word_unit_counts=[]; word_unit_flat=[]
     for word in word_names:
         encoded=word.encode('ascii')
-        seq=WORD_UNITS[word]
+        seq=active_word_units[word]
         if len(encoded)>=WORD_NAME_STRIDE:
             raise SystemExit(f'word name too long: {word}')
         if len(seq)>WORD_UNIT_STRIDE:
@@ -535,6 +550,8 @@ def main():
         'real-voice-unit-count='+str(len(external_units))+'\n'
         'real-voice-units='+','.join(external_units)+'\n'
         'real-voice-skipped-count='+str(len(skipped_external_units))+'\n'
+        'physical-word-bank-mode=' + ('priority-real-voice-plus-letter-fallback' if external_voice else 'full-voicecore-word-bank') + '\n'
+        'physical-priority-word-count='+str(len(EXTERNAL_WORD_PRIORITY))+'\n'
         'inter-letter-silence-ms=18-runtime-gap\n'
         'intra-word-phoneme-silence-ms=0\n'
         'word-silence-ms=70\n'
