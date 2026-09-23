@@ -178,6 +178,20 @@ Invoke-Checked $python @(
   $unitsMeta
 )
 
+$unitsMetaText = Get-Content -Raw -LiteralPath $unitsMeta
+if ($unitsMetaText -notmatch 'full-utterance-asset=true') {
+  throw "All eight real guidance phrase clips were not retained"
+}
+if ($unitsMetaText -notmatch 'real-voice-priority=phrases,words,digits,letters') {
+  throw "Physical intelligibility priority metadata missing"
+}
+$wordMatch = [regex]::Match($unitsMetaText, 'real-voice-word-count=(\d+)')
+if (-not $wordMatch.Success -or [int]$wordMatch.Groups[1].Value -lt 1) {
+  throw "No real whole-word BIOS clips fit in the firmware bank"
+}
+Write-Host "REAL_BIOS_WORD_CLIPS=$($wordMatch.Groups[1].Value)"
+'STAGE=REAL_WORD_BANK_READY' | Add-Content -LiteralPath $globalStageLog -Encoding ascii
+
 $flags = @(
   '--target=x86_64-pc-windows-msvc',
   '-DQEV_INTERACTIVE_NAV=1',
@@ -324,6 +338,11 @@ $summary = @(
 )
 if (Test-Path $evidenceFile) {
   $summary += Get-Content -LiteralPath $evidenceFile
+}
+if (Test-Path $unitsMeta) {
+  $summary += Get-Content -LiteralPath $unitsMeta | Where-Object {
+    $_ -match '^(bank-bytes|real-voice-unit-count|real-voice-units|real-voice-skipped-count|real-voice-word-count|real-voice-digit-count|real-voice-letter-count|real-voice-priority|full-utterance-asset)='
+  }
 }
 $summary | Set-Content -LiteralPath $summaryFile -Encoding utf8
 'STAGE=PIPELINE_PASS' | Add-Content -LiteralPath $globalStageLog -Encoding ascii
