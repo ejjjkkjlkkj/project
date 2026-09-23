@@ -6,6 +6,25 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
+$globalErrorLog = 'C:\Windows\Temp\qev-psexec-pipeline-error.txt'
+$globalStageLog = 'C:\Windows\Temp\qev-psexec-pipeline-stage.txt'
+Remove-Item -LiteralPath $globalErrorLog -Force -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath $globalStageLog -Force -ErrorAction SilentlyContinue
+'STAGE=SCRIPT_START' | Set-Content -LiteralPath $globalStageLog -Encoding ascii
+
+trap {
+  $err = $_
+  @(
+    'PSEXEC_PIPELINE_ERROR=FAIL',
+    "MESSAGE=$($err.Exception.Message)",
+    "TYPE=$($err.Exception.GetType().FullName)",
+    "POSITION=$($err.InvocationInfo.PositionMessage)",
+    "SCRIPT_STACK=$($err.ScriptStackTrace)",
+    "CATEGORY=$($err.CategoryInfo)"
+  ) | Set-Content -LiteralPath $globalErrorLog -Encoding utf8
+  exit 1
+}
+
 function Resolve-RequiredFile([string[]]$Candidates, [string]$Label) {
   foreach ($candidate in $Candidates) {
     if ($candidate -and (Test-Path -LiteralPath $candidate)) {
@@ -27,10 +46,13 @@ if ($identity -ne 'NT AUTHORITY\SYSTEM') {
   throw "This stage must run through PsExec as SYSTEM. Current identity: $identity"
 }
 
+'STAGE=IDENTITY_PASS' | Add-Content -LiteralPath $globalStageLog -Encoding ascii
 $Workspace = (Resolve-Path -LiteralPath $Workspace).Path
+'STAGE=WORKSPACE_RESOLVED' | Add-Content -LiteralPath $globalStageLog -Encoding ascii
 Set-Location -LiteralPath $Workspace
 $buildDir = Join-Path $Workspace 'build'
 New-Item -ItemType Directory -Force -Path $buildDir | Out-Null
+'STAGE=BUILD_DIR_READY' | Add-Content -LiteralPath $globalStageLog -Encoding ascii
 
 $python = Resolve-RequiredFile @(
   'C:\Python316\python.exe',
@@ -55,6 +77,7 @@ $vmrun = Resolve-RequiredFile @(
   "$env:ProgramFiles\VMware\VMware Workstation\vmrun.exe",
   "${env:ProgramFiles(x86)}\VMware\VMware Workstation\vmrun.exe"
 ) 'VMware vmrun'
+'STAGE=TOOLS_RESOLVED' | Add-Content -LiteralPath $globalStageLog -Encoding ascii
 
 $cs = Get-CimInstance Win32_ComputerSystem
 $cpu = Get-CimInstance Win32_Processor | Select-Object -First 1
@@ -92,6 +115,7 @@ Write-Host "CLANG=$clang"
 Write-Host "LLDLINK=$lld"
 Write-Host "VMRUN=$vmrun"
 
+'STAGE=HOST_VALIDATED' | Add-Content -LiteralPath $globalStageLog -Encoding ascii
 Invoke-Checked 'powershell.exe' @(
   '-NoProfile','-ExecutionPolicy','Bypass',
   '-File',(Join-Path $Workspace 'navigation\uefi\generate_system_voice_assets.ps1'),
@@ -115,6 +139,7 @@ if ($voiceText -notmatch 'SYSTEM_SPEECH_OUTPUT_RATE=16000' -or
 Write-Host "SYSTEM_SPEECH_NATIVE_FR=PASS"
 Get-Content -LiteralPath $voiceEvidence
 
+'STAGE=SYSTEM_VOICE_READY' | Add-Content -LiteralPath $globalStageLog -Encoding ascii
 $qualitySource = Join-Path $voiceDir 'quality_reference.wav'
 if (-not (Test-Path $qualitySource)) {
   throw "quality_reference.wav was not generated"
@@ -140,6 +165,7 @@ foreach ($item in @(
   Start-Sleep -Milliseconds 400
 }
 
+'STAGE=AUDIBLE_AB_COMPLETE' | Add-Content -LiteralPath $globalStageLog -Encoding ascii
 $env:QEV_EXTERNAL_VOICE_DIR = $voiceDir
 $unitsC = Join-Path $buildDir 'navigation_units.c'
 $unitsMeta = Join-Path $buildDir 'navigation_units.txt'
@@ -296,4 +322,5 @@ if (Test-Path $evidenceFile) {
   $summary += Get-Content -LiteralPath $evidenceFile
 }
 $summary | Set-Content -LiteralPath $summaryFile -Encoding utf8
+'STAGE=PIPELINE_PASS' | Add-Content -LiteralPath $globalStageLog -Encoding ascii
 Write-Host "PSEXEC_PHYSICAL_PIPELINE=PASS"
