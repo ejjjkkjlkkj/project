@@ -2,12 +2,6 @@ name: vmware-uefi-selfhosted-psexec
 
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths:
-      - 'voice/**'
-      - 'navigation/**'
-      - '.github/workflows/vmware-uefi-selfhosted.yml'
 
 permissions:
   contents: read
