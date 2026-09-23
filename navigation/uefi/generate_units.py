@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 from __future__ import annotations
-import hashlib, importlib.util, struct, sys
+import hashlib, importlib.util, os, struct, sys, wave
 from pathlib import Path
 
 ROOT=Path(__file__).resolve().parents[2]
@@ -8,6 +8,7 @@ SOURCE=ROOT/'voice'/'v4'/'native_speech_v4.py'
 SOURCE_RATE=24000
 UNIT_ENCODING_MULAW=1
 UEFI_VOICE_PROFILE='clair'
+MAX_BANK_BYTES=1200*1024
 LETTER_UNITS={
  # Clear fallback spelling for arbitrary firmware labels. The previous map
  # treated each grapheme as a raw phoneme, which made unknown HII labels sound
@@ -233,6 +234,98 @@ def _to_mulaw_24k(samples):
         out.append(_linear_to_mulaw(avg))
     return bytes(out)
 
+def _wav_to_mulaw_24k(path: Path) -> bytes:
+    with wave.open(str(path), 'rb') as w:
+        channels=w.getnchannels()
+        width=w.getsampwidth()
+        rate=w.getframerate()
+        frames=w.getnframes()
+        if channels not in (1,2) or width != 2 or rate <= 0:
+            raise SystemExit(f'unsupported real-voice WAV format: {path}')
+        raw=w.readframes(frames)
+    values=struct.unpack('<' + 'h'*(len(raw)//2), raw)
+    if channels == 2:
+        mono=[(int(values[i])+int(values[i+1]))//2 for i in range(0,len(values),2)]
+    else:
+        mono=[int(x) for x in values]
+    if not mono:
+        raise SystemExit(f'empty real-voice WAV: {path}')
+
+    # Remove excessive SAPI lead/tail silence while keeping 25 ms safety pads.
+    threshold=max(160, max(abs(x) for x in mono)//120)
+    first=0
+    while first < len(mono) and abs(mono[first]) < threshold:
+        first+=1
+    last=len(mono)
+    while last > first and abs(mono[last-1]) < threshold:
+        last-=1
+    pad=max(1, rate*25//1000)
+    first=max(0, first-pad)
+    last=min(len(mono), last+pad)
+    mono=mono[first:last] if first < last else mono
+
+    if rate != SOURCE_RATE:
+        out_count=max(1, (len(mono)*SOURCE_RATE)//rate)
+        resampled=[]
+        for oi in range(out_count):
+            num=oi*rate
+            i=num//SOURCE_RATE
+            frac=num%SOURCE_RATE
+            if i >= len(mono)-1:
+                sample=mono[-1]
+            else:
+                a=mono[i]
+                b=mono[i+1]
+                sample=a + ((b-a)*frac)//SOURCE_RATE
+            resampled.append(sample)
+        mono=resampled
+    return bytes(_linear_to_mulaw(x) for x in mono)
+
+def _external_unit_order(names):
+    phrases=[_phrase_unit_name(i) for i in range(len(PHRASE_TEXTS))]
+    letters=[f'letter_{ch}' for ch in 'abcdefghijklmnopqrstuvwxyz']
+    digits=[f'digit_{ch}' for ch in '0123456789']
+    words=[
+        'word_boot','word_bios','word_security','word_secure','word_configuration',
+        'word_settings','word_system','word_device','word_storage','word_network',
+        'word_password','word_save','word_exit','word_enabled','word_disabled',
+        'word_advanced','word_main','word_setup','word_usb','word_nvme','word_tpm',
+        'word_cpu','word_memory','word_processor','word_recovery','word_restore',
+        'word_default','word_option','word_value','word_enter','word_escape',
+        'word_help','word_up','word_down','word_left','word_right','word_change',
+        'word_action','word_checked','word_back','word_button',
+    ]
+    ordered=phrases+letters+digits+words
+    return [n for n in ordered if n in names]
+
+def apply_external_voice_units(units, names):
+    root=os.environ.get('QEV_EXTERNAL_VOICE_DIR','').strip()
+    if not root:
+        return units, [], []
+    voice_dir=Path(root)
+    if not voice_dir.is_dir():
+        raise SystemExit(f'QEV_EXTERNAL_VOICE_DIR not found: {voice_dir}')
+
+    result=dict(units)
+    current=sum(len(result[n]) for n in names)
+    accepted=[]
+    skipped=[]
+    for name in _external_unit_order(names):
+        path=voice_dir/(name+'.wav')
+        if not path.is_file():
+            continue
+        encoded=_wav_to_mulaw_24k(path)
+        projected=current-len(result[name])+len(encoded)
+        if projected > MAX_BANK_BYTES:
+            skipped.append(name)
+            continue
+        current=projected
+        result[name]=encoded
+        accepted.append(name)
+    if not accepted:
+        raise SystemExit('real-voice directory present but no WAV asset was accepted')
+    return result, accepted, skipped
+
 def make_source_units(speech):
     units={'sil':bytes([_linear_to_mulaw(0)])*(SOURCE_RATE*70//1000)}
     for ch,seq in PHONEME_LETTER_UNITS.items():
@@ -299,13 +392,14 @@ def main():
         | {_phrase_unit_name(i) for i in range(len(PHRASE_TEXTS))}
     )
     source_units=make_source_units(speech)
+    source_units, external_units, skipped_external_units = apply_external_voice_units(source_units, names)
     # Keep compact 24 kHz G.711 mu-law clips in the EFI image. The firmware
     # decodes and linearly upsamples them to 48 kHz signed-16 stereo.
     converted={n:source_units[n] for n in names}
     offsets=[]; lengths=[]; bank=bytearray()
     for n in names:
         offsets.append(len(bank)); lengths.append(len(converted[n])); bank += converted[n]
-    if len(bank) > 1200*1024:
+    if len(bank) > MAX_BANK_BYTES:
         raise SystemExit(f'unit bank too large: {len(bank)}')
     index={n:i for i,n in enumerate(names)}
     counts=[]; flat=[]
@@ -397,17 +491,25 @@ def main():
         'source-sample-rate-hz='+str(SOURCE_RATE)+'\n'
         'unit-encoding=g711-mulaw-u8\n'
         'voice-profile='+UEFI_VOICE_PROFILE+'\n'
+        'real-voice-source=' + ('windows-system-speech' if external_units else 'none') + '\n'
+        'real-voice-unit-count='+str(len(external_units))+'\n'
+        'real-voice-units='+','.join(external_units)+'\n'
+        'real-voice-skipped-count='+str(len(skipped_external_units))+'\n'
         'inter-letter-silence-ms=18-runtime-gap\n'
         'intra-word-phoneme-silence-ms=0\n'
         'word-silence-ms=70\n'
-        'speech-mode=whole-phrase-voicecore-v4-uefi-v8-mulaw24k\n'
-        'full-utterance-asset=false\n'
+        'speech-mode=hybrid-system-speech-plus-voicecore-v4-uefi-v10\n'
+        'full-utterance-asset=' + ('true' if all(_phrase_unit_name(i) in external_units for i in range(len(PHRASE_TEXTS))) else 'false') + '\n'
     )
     print('HII_GRAPH_PROMPT_UNIT_GENERATION=PASS')
     print('UNIT_COUNT='+str(len(names)))
     print('BANK_BYTES='+str(len(bank)))
     print('WORD_LEXICON_COUNT='+str(len(word_names)))
     print('PHRASE_CLIP_COUNT='+str(len(PHRASE_TEXTS)))
+    print('REAL_VOICE_UNIT_COUNT='+str(len(external_units)))
+    print('REAL_VOICE_SKIPPED_COUNT='+str(len(skipped_external_units)))
+    if external_units:
+        print('SYSTEM_SPEECH_REAL_VOICE_BANK=PASS')
 
 if __name__=='__main__':
     main()
