@@ -301,14 +301,18 @@ def _external_unit_order(names):
     letters=[f'letter_{ch}' for ch in 'abcdefghijklmnopqrstuvwxyz']
     digits=[f'digit_{ch}' for ch in '0123456789']
     words=[
-        'word_boot','word_bios','word_security','word_secure','word_configuration',
-        'word_settings','word_system','word_device','word_storage','word_network',
-        'word_password','word_save','word_exit','word_enabled','word_disabled',
-        'word_advanced','word_main','word_setup','word_usb','word_nvme','word_tpm',
-        'word_cpu','word_memory','word_processor','word_recovery','word_restore',
-        'word_default','word_option','word_value','word_enter','word_escape',
-        'word_help','word_up','word_down','word_left','word_right','word_change',
-        'word_action','word_checked','word_back','word_button',
+        # Highest-value ASUS/AMI setup tabs and commit actions first. Keeping
+        # these as complete System.Speech clips avoids synthetic fallback in
+        # the screens a blind user must traverse most often.
+        'word_main','word_advanced','word_boot','word_security','word_save',
+        'word_exit','word_setup','word_bios','word_system','word_settings',
+        'word_enabled','word_disabled','word_option','word_value','word_device',
+        'word_storage','word_usb','word_nvme','word_tpm','word_cpu','word_memory',
+        'word_network','word_password','word_secure','word_configuration',
+        'word_processor','word_recovery','word_restore','word_default',
+        'word_enter','word_escape','word_help','word_up','word_down','word_left',
+        'word_right','word_change','word_action','word_checked','word_back',
+        'word_button',
     ]
     # Physical intelligibility priority: keep complete guidance phrases
     # first, then common BIOS words as whole clips. Letters remain the final
