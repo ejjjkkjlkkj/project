@@ -13,7 +13,7 @@ permissions:
 
 concurrency:
   group: vmware-uefi-selfhosted
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   psexec-system-voice:
