@@ -33,6 +33,7 @@ extern const u32 qev_unit_off[];
 extern const u32 qev_unit_len[];
 extern const u32 qev_unit_count;
 extern const u32 qev_unit_source_rate;
+extern const u32 qev_unit_encoding;
 extern const u32 qev_sil_unit_index;
 extern const u8 qev_letter_unit_count[];
 extern const u8 qev_letter_units[];
@@ -914,9 +915,19 @@ static int configure_output_path(u8 pin, u8 dac) {
     return 1;
 }
 
+static s32 qev_mulaw_decode(u8 code) {
+    u8 u = (u8)(~code);
+    u32 exponent = (u32)((u >> 4) & 0x07u);
+    u32 mantissa = (u32)(u & 0x0fu);
+    s32 sample = (s32)(((mantissa << 3) + 0x84u) << exponent);
+    sample -= 0x84;
+    return (u & 0x80u) ? -sample : sample;
+}
+
 static int append_unit_pcm(volatile u8 *pcm, u32 capacity,
                            u32 *total_bytes, u32 ui) {
     if (!pcm || !total_bytes || ui >= qev_unit_count ||
+        qev_unit_encoding != 1u ||
         !qev_unit_source_rate || (48000u % qev_unit_source_rate) != 0u)
         return 0;
     u32 off = qev_unit_off[ui];
@@ -930,12 +941,14 @@ static int append_unit_pcm(volatile u8 *pcm, u32 capacity,
 
     u32 pos = *total_bytes;
     for (u32 i = 0; i < len; ++i) {
-        s32 a = ((s32)qev_unit_bank[off + i] - 128) * 180;
+        s32 a = qev_mulaw_decode(qev_unit_bank[off + i]);
         s32 b = a;
         if (i + 1u < len)
-            b = ((s32)qev_unit_bank[off + i + 1u] - 128) * 180;
+            b = qev_mulaw_decode(qev_unit_bank[off + i + 1u]);
         for (u32 phase = 0; phase < factor; ++phase) {
             s32 sample = a + ((b - a) * (s32)phase) / (s32)factor;
+            if (sample > 32767) sample = 32767;
+            if (sample < -32768) sample = -32768;
             u16 bits = (u16)sample;
             pcm[pos + 0u] = (u8)(bits & 0xffu);
             pcm[pos + 1u] = (u8)(bits >> 8);
@@ -1147,6 +1160,7 @@ static int speech_dma_begin(const char *text, u32 text_count) {
     marker("HII_GRAPH_SPEECH_PACING=PASS");
     marker("HII_GRAPH_SPEECH_CONTINUOUS_PHONEMES=PASS");
     marker("HII_GRAPH_SPEECH_WHOLE_CLIP_VOICECORE=PASS");
+    marker("HII_GRAPH_SPEECH_MULAW24K=PASS");
     marker("HII_GRAPH_SPEECH_PHRASE_FIRST_MODE=PASS");
     marker("HII_GRAPH_SPEECH_DIGITS=PASS");
     marker("HII_GRAPH_SPEECH_HYBRID_WORD_MODE=PASS");

@@ -5,7 +5,8 @@ from pathlib import Path
 
 ROOT=Path(__file__).resolve().parents[2]
 SOURCE=ROOT/'voice'/'v4'/'native_speech_v4.py'
-SOURCE_RATE=16000
+SOURCE_RATE=24000
+UNIT_ENCODING_MULAW=1
 LETTER_UNITS={
  # Clear fallback spelling for arbitrary firmware labels. The previous map
  # treated each grapheme as a raw phoneme, which made unknown HII labels sound
@@ -195,26 +196,52 @@ def _render_sequence(speech, sequence):
         out=speech._crossfade(out, seg, 2.0 if kind in {'p','s'} else 7.0)
     return speech._finalize(out)
 
-def _to_u8_16k(samples):
-    # VoiceCore renders 48 kHz s16 mono. Average each 3-frame group into
-    # deterministic 16 kHz unsigned PCM for the compact firmware bank.
+MULAW_BIAS=0x84
+MULAW_CLIP=32635
+
+def _linear_to_mulaw(sample):
+    sample=max(-32768,min(32767,int(sample)))
+    sign=0x80 if sample < 0 else 0
+    if sample < 0:
+        sample=-sample
+    sample=min(MULAW_CLIP,sample)+MULAW_BIAS
+    exponent=7
+    mask=0x4000
+    while exponent > 0 and not (sample & mask):
+        exponent-=1
+        mask >>= 1
+    mantissa=(sample >> (exponent+3)) & 0x0f
+    return (~(sign | (exponent << 4) | mantissa)) & 0xff
+
+def _mulaw_to_linear(code):
+    u=(~int(code)) & 0xff
+    exponent=(u >> 4) & 0x07
+    mantissa=u & 0x0f
+    sample=((mantissa << 3) + MULAW_BIAS) << exponent
+    sample-=MULAW_BIAS
+    return -sample if (u & 0x80) else sample
+
+def _to_mulaw_24k(samples):
+    # VoiceCore renders 48 kHz signed-16 mono. Downsample by 2 with a
+    # deterministic box low-pass, then G.711 mu-law compand to 8 bits.
+    # Compared with the former 16 kHz linear-u8 bank this preserves far more
+    # low-level consonant detail while keeping the firmware footprint bounded.
     out=bytearray()
-    for i in range(0,len(samples)-2,3):
-        avg=(int(samples[i])+int(samples[i+1])+int(samples[i+2]))//3
-        q=128 + max(-128,min(127,avg//256))
-        out.append(q & 0xff)
+    for i in range(0,len(samples)-1,2):
+        avg=(int(samples[i])+int(samples[i+1]))//2
+        out.append(_linear_to_mulaw(avg))
     return bytes(out)
 
 def make_source_units(speech):
-    units={'sil':bytes([128])*(SOURCE_RATE*70//1000)}
+    units={'sil':bytes([_linear_to_mulaw(0)])*(SOURCE_RATE*70//1000)}
     for ch,seq in PHONEME_LETTER_UNITS.items():
-        units[f'letter_{ch}']=_to_u8_16k(_render_sequence(speech,seq))
+        units[f'letter_{ch}']=_to_mulaw_24k(_render_sequence(speech,seq))
     for ch,seq in PHONEME_DIGIT_UNITS.items():
-        units[f'digit_{ch}']=_to_u8_16k(_render_sequence(speech,seq))
+        units[f'digit_{ch}']=_to_mulaw_24k(_render_sequence(speech,seq))
     for word,seq in PHONEME_WORD_UNITS.items():
-        units[f'word_{word}']=_to_u8_16k(_render_sequence(speech,seq))
+        units[f'word_{word}']=_to_mulaw_24k(_render_sequence(speech,seq))
     for index,phrase in enumerate(PHRASE_TEXTS):
-        units[_phrase_unit_name(index)]=_to_u8_16k(speech.synthesize(phrase, 'screen'))
+        units[_phrase_unit_name(index)]=_to_mulaw_24k(speech.synthesize(phrase, 'screen'))
     return units
 
 WORD_NAME_STRIDE=16
@@ -235,11 +262,12 @@ def convert(raw: bytes, source_rate: int) -> bytes:
     factor=48000//source_rate
     out=bytearray()
     for i,sample in enumerate(raw):
-        a=max(-32768,min(32767,(sample-128)*180))
+        a=_mulaw_to_linear(sample)
         nxt=raw[i+1] if i+1 < len(raw) else sample
-        b=max(-32768,min(32767,(nxt-128)*180))
+        b=_mulaw_to_linear(nxt)
         for phase in range(factor):
             signed=a + ((b-a)*phase)//factor
+            signed=max(-32768,min(32767,signed))
             out += struct.pack('<hh',signed,signed)
     return bytes(out)
 
@@ -270,13 +298,13 @@ def main():
         | {_phrase_unit_name(i) for i in range(len(PHRASE_TEXTS))}
     )
     source_units=make_source_units(speech)
-    # Keep compact 16 kHz u8 clips in the EFI image. The firmware expands
-    # them to 48 kHz signed-16 stereo while building each DMA utterance.
+    # Keep compact 24 kHz G.711 mu-law clips in the EFI image. The firmware
+    # decodes and linearly upsamples them to 48 kHz signed-16 stereo.
     converted={n:source_units[n] for n in names}
     offsets=[]; lengths=[]; bank=bytearray()
     for n in names:
         offsets.append(len(bank)); lengths.append(len(converted[n])); bank += converted[n]
-    if len(bank) > 1024*1024:
+    if len(bank) > 1200*1024:
         raise SystemExit(f'unit bank too large: {len(bank)}')
     index={n:i for i,n in enumerate(names)}
     counts=[]; flat=[]
@@ -328,6 +356,7 @@ def main():
         arr_u32('qev_unit_off',offsets),
         arr_u32('qev_unit_len',lengths),
         f'const unsigned int qev_unit_source_rate = {SOURCE_RATE}u;\n',
+        f'const unsigned int qev_unit_encoding = {UNIT_ENCODING_MULAW}u;\n',
         f'const unsigned int qev_unit_count = {len(names)}u;\n',
         f'const unsigned int qev_sil_unit_index = {index["sil"]}u;\n',
         arr_u8('qev_letter_unit_count',counts),
@@ -365,10 +394,11 @@ def main():
         f'word-unit-stride={WORD_UNIT_STRIDE}\n'
         f'phrase-clip-count={len(PHRASE_TEXTS)}\n'
         'source-sample-rate-hz='+str(SOURCE_RATE)+'\n'
+        'unit-encoding=g711-mulaw-u8\n'
         'inter-letter-silence-ms=18-runtime-gap\n'
         'intra-word-phoneme-silence-ms=0\n'
         'word-silence-ms=70\n'
-        'speech-mode=whole-phrase-voicecore-v4-uefi-v7\n'
+        'speech-mode=whole-phrase-voicecore-v4-uefi-v8-mulaw24k\n'
         'full-utterance-asset=false\n'
     )
     print('HII_GRAPH_PROMPT_UNIT_GENERATION=PASS')
