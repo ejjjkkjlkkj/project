@@ -342,6 +342,11 @@ if (Test-Path $unitsMeta) {
 $summary | Set-Content -LiteralPath $summaryFile -Encoding utf8
 'STAGE=PIPELINE_PASS' | Add-Content -LiteralPath $globalStageLog -Encoding ascii
 Write-Host "PSEXEC_PHYSICAL_PIPELINE=PASS"
+
+# A non-zero vmrun stop result can remain in $LASTEXITCODE even after every
+# validation gate passed. Do not let that stale native exit code turn a proven
+# pipeline into a PsExec failure.
+exit 0
 ) {
   throw "All eight real guidance phrase clips were not retained"
 }
