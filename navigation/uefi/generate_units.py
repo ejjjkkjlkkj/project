@@ -310,7 +310,12 @@ def _external_unit_order(names):
         'word_help','word_up','word_down','word_left','word_right','word_change',
         'word_action','word_checked','word_back','word_button',
     ]
-    ordered=phrases+letters+digits+words
+    # Physical intelligibility priority: keep complete guidance phrases
+    # first, then common BIOS words as whole clips. Letters remain the final
+    # fallback for unknown labels. The previous phrases+letters+digits+words
+    # order exhausted the 1.2 MiB bank before any real whole-word clips could
+    # be accepted, forcing navigation labels back to synthetic VoiceCore.
+    ordered=phrases+words+digits+letters
     return [n for n in ordered if n in names]
 
 def apply_external_voice_units(units, names):
@@ -511,6 +516,10 @@ def main():
         'real-voice-unit-count='+str(len(external_units))+'\n'
         'real-voice-units='+','.join(external_units)+'\n'
         'real-voice-skipped-count='+str(len(skipped_external_units))+'\n'
+        'real-voice-word-count='+str(sum(1 for n in external_units if n.startswith('word_')))+'\n'
+        'real-voice-digit-count='+str(sum(1 for n in external_units if n.startswith('digit_')))+'\n'
+        'real-voice-letter-count='+str(sum(1 for n in external_units if n.startswith('letter_')))+'\n'
+        'real-voice-priority=phrases,words,digits,letters\n'
         'inter-letter-silence-ms=18-runtime-gap\n'
         'intra-word-phoneme-silence-ms=0\n'
         'word-silence-ms=70\n'
@@ -524,6 +533,9 @@ def main():
     print('PHRASE_CLIP_COUNT='+str(len(PHRASE_TEXTS)))
     print('REAL_VOICE_UNIT_COUNT='+str(len(external_units)))
     print('REAL_VOICE_SKIPPED_COUNT='+str(len(skipped_external_units)))
+    print('REAL_VOICE_WORD_COUNT='+str(sum(1 for n in external_units if n.startswith('word_'))))
+    print('REAL_VOICE_DIGIT_COUNT='+str(sum(1 for n in external_units if n.startswith('digit_'))))
+    print('REAL_VOICE_LETTER_COUNT='+str(sum(1 for n in external_units if n.startswith('letter_'))))
     if external_units:
         print('SYSTEM_SPEECH_REAL_VOICE_BANK=PASS')
 
