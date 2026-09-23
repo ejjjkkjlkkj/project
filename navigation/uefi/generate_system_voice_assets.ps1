@@ -37,17 +37,23 @@ $probe = New-Object System.Speech.Synthesis.SpeechSynthesizer
 $voices = @($probe.GetInstalledVoices() | Where-Object { $_.Enabled })
 if (-not $voices) { throw "No enabled System.Speech voice is available under this account." }
 
-$fr = $voices | Where-Object { $_.VoiceInfo.Culture.Name -like 'fr-*' } | Select-Object -First 1
-$en = $voices | Where-Object { $_.VoiceInfo.Culture.Name -like 'en-*' } | Select-Object -First 1
-if (-not $fr) { $fr = $voices | Select-Object -First 1 }
-if (-not $en) { $en = $fr }
+$frNative = $voices | Where-Object { $_.VoiceInfo.Culture.Name -like 'fr-*' } | Select-Object -First 1
+$enNative = $voices | Where-Object { $_.VoiceInfo.Culture.Name -like 'en-*' } | Select-Object -First 1
+$fr = if ($frNative) { $frNative } else { $voices | Select-Object -First 1 }
+$en = if ($enNative) { $enNative } else { $fr }
+$voiceInventory = ($voices | ForEach-Object {
+  "$($_.VoiceInfo.Name)|$($_.VoiceInfo.Culture.Name)"
+}) -join ';'
 
 $voiceEvidence = @(
   "SYSTEM_SPEECH_VOICE_COUNT=$($voices.Count)"
   "SYSTEM_SPEECH_FR=$($fr.VoiceInfo.Name)"
   "SYSTEM_SPEECH_FR_CULTURE=$($fr.VoiceInfo.Culture.Name)"
+  "SYSTEM_SPEECH_FR_NATIVE=$([bool]$frNative)"
   "SYSTEM_SPEECH_EN=$($en.VoiceInfo.Name)"
   "SYSTEM_SPEECH_EN_CULTURE=$($en.VoiceInfo.Culture.Name)"
+  "SYSTEM_SPEECH_EN_NATIVE=$([bool]$enNative)"
+  "SYSTEM_SPEECH_VOICES=$voiceInventory"
   "SYSTEM_SPEECH_OUTPUT_RATE=16000"
   "SYSTEM_SPEECH_OUTPUT_BITS=16"
   "SYSTEM_SPEECH_OUTPUT_CHANNELS=1"
