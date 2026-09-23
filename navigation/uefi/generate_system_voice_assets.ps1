@@ -6,26 +6,32 @@ $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Speech
 
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
-$root = Split-Path -Parent $MyInvocation.MyCommand.Path
-$manifestPath = Join-Path $root 'system_voice_manifest.py'
-if (-not (Test-Path $manifestPath)) { throw "Missing manifest: $manifestPath" }
-
-$py = @'
-import importlib.util, json, sys
-p=sys.argv[1]
-spec=importlib.util.spec_from_file_location("m",p)
-m=importlib.util.module_from_spec(spec)
-spec.loader.exec_module(m)
-print(json.dumps({
- "letters":m.LETTER_TEXT,
- "digits":m.DIGIT_TEXT,
- "words":list(m.PRIORITY_WORDS),
- "phrases":list(m.PHRASE_SPOKEN),
-}, ensure_ascii=False))
-'@
-$manifestJson = $py | python - $manifestPath
-if ($LASTEXITCODE) { throw "Manifest extraction failed." }
-$manifest = $manifestJson | ConvertFrom-Json
+$letters = [ordered]@{
+  a='a'; b='bé'; c='cé'; d='dé'; e='e'; f='èf'; g='gé'; h='ache'; i='i'; j='ji';
+  k='ka'; l='elle'; m='ème'; n='ène'; o='o'; p='pé'; q='ku'; r='ère'; s='esse';
+  t='té'; u='u'; v='vé'; w='double vé'; x='ixe'; y='i grec'; z='zède'
+}
+$digits = [ordered]@{
+  '0'='zéro'; '1'='un'; '2'='deux'; '3'='trois'; '4'='quatre'; '5'='cinq';
+  '6'='six'; '7'='sept'; '8'='huit'; '9'='neuf'
+}
+$words = @(
+  'advanced','action','asus','back','bios','boot','button','change','checked',
+  'configuration','cpu','default','device','disabled','enabled','enter','escape',
+  'exit','help','left','main','memory','network','nvme','option','password',
+  'processor','recovery','restore','right','save','secure','security','settings',
+  'setup','storage','system','tpm','up','down','usb','value'
+)
+$phrases = @(
+  "Prêt. Appuyez sur F un pour l'aide.",
+  "Flèche haut et flèche bas pour naviguer. Flèches gauche et droite pour modifier.",
+  "Entrée pour activer. Échap pour revenir. F un pour l'aide.",
+  "Aucun changement.",
+  "Aperçu des modifications annulé.",
+  "Coché.",
+  "Non coché.",
+  "Protégé."
+)
 
 $probe = New-Object System.Speech.Synthesis.SpeechSynthesizer
 $voices = @($probe.GetInstalledVoices() | Where-Object { $_.Enabled })
@@ -64,17 +70,17 @@ function Write-VoiceWav([string]$FileName, [string]$Text, [string]$VoiceName, [i
   }
 }
 
-foreach ($p in $manifest.letters.PSObject.Properties) {
-  Write-VoiceWav ("letter_{0}.wav" -f $p.Name) ([string]$p.Value) $fr.VoiceInfo.Name 1
+foreach ($key in $letters.Keys) {
+  Write-VoiceWav ("letter_{0}.wav" -f $key) ([string]$letters[$key]) $fr.VoiceInfo.Name 1
 }
-foreach ($p in $manifest.digits.PSObject.Properties) {
-  Write-VoiceWav ("digit_{0}.wav" -f $p.Name) ([string]$p.Value) $fr.VoiceInfo.Name 1
+foreach ($key in $digits.Keys) {
+  Write-VoiceWav ("digit_{0}.wav" -f $key) ([string]$digits[$key]) $fr.VoiceInfo.Name 1
 }
-foreach ($w in $manifest.words) {
+foreach ($w in $words) {
   Write-VoiceWav ("word_{0}.wav" -f $w) ([string]$w) $en.VoiceInfo.Name 1
 }
-for ($i = 0; $i -lt $manifest.phrases.Count; $i++) {
-  Write-VoiceWav ("phrase_{0}.wav" -f $i) ([string]$manifest.phrases[$i]) $fr.VoiceInfo.Name 0
+for ($i = 0; $i -lt $phrases.Count; $i++) {
+  Write-VoiceWav ("phrase_{0}.wav" -f $i) ([string]$phrases[$i]) $fr.VoiceInfo.Name 0
 }
 
 $generated = @(Get-ChildItem -Path $OutDir -Filter '*.wav')
