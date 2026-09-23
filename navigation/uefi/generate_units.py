@@ -7,6 +7,7 @@ ROOT=Path(__file__).resolve().parents[2]
 SOURCE=ROOT/'voice'/'v4'/'native_speech_v4.py'
 SOURCE_RATE=24000
 UNIT_ENCODING_MULAW=1
+UEFI_VOICE_PROFILE='clair'
 LETTER_UNITS={
  # Clear fallback spelling for arbitrary firmware labels. The previous map
  # treated each grapheme as a raw phoneme, which made unknown HII labels sound
@@ -186,7 +187,7 @@ def _render_sequence(speech, sequence):
     mapped=[_V4_PHONEME.get(p,p) for p in sequence]
     if not mapped:
         return []
-    voice=speech.VOICES['screen']
+    voice=speech.VOICES[UEFI_VOICE_PROFILE]
     out=[]
     for idx,ph in enumerate(mapped):
         if ph not in speech.PHONEMES:
@@ -241,7 +242,7 @@ def make_source_units(speech):
     for word,seq in PHONEME_WORD_UNITS.items():
         units[f'word_{word}']=_to_mulaw_24k(_render_sequence(speech,seq))
     for index,phrase in enumerate(PHRASE_TEXTS):
-        units[_phrase_unit_name(index)]=_to_mulaw_24k(speech.synthesize(phrase, 'screen'))
+        units[_phrase_unit_name(index)]=_to_mulaw_24k(speech.synthesize(phrase, UEFI_VOICE_PROFILE))
     return units
 
 WORD_NAME_STRIDE=16
@@ -395,6 +396,7 @@ def main():
         f'phrase-clip-count={len(PHRASE_TEXTS)}\n'
         'source-sample-rate-hz='+str(SOURCE_RATE)+'\n'
         'unit-encoding=g711-mulaw-u8\n'
+        'voice-profile='+UEFI_VOICE_PROFILE+'\n'
         'inter-letter-silence-ms=18-runtime-gap\n'
         'intra-word-phoneme-silence-ms=0\n'
         'word-silence-ms=70\n'
