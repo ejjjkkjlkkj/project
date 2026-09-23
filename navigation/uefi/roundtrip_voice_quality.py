@@ -8,6 +8,8 @@ import sys
 import wave
 from pathlib import Path
 
+import generate_units as gu
+
 MULAW_BIAS = 0x84
 MULAW_CLIP = 32635
 
@@ -62,21 +64,25 @@ def main() -> int:
         comptype = w.getcomptype()
         raw = w.readframes(frames)
 
-    if channels != 1 or width != 2 or rate != 16000 or comptype != "NONE":
+    if channels != 1 or width != 2 or rate != gu.SOURCE_RATE or comptype != "NONE":
         raise SystemExit(
-            f"expected PCM mono 16-bit 16000 Hz, got channels={channels} width={width} "
-            f"rate={rate} compression={comptype}"
+            f"expected PCM mono 16-bit {gu.SOURCE_RATE} Hz, got channels={channels} "
+            f"width={width} rate={rate} compression={comptype}"
         )
 
     samples = list(struct.unpack("<" + "h" * (len(raw) // 2), raw))
     if not samples:
         raise SystemExit("empty input")
 
-    encoded = bytes(linear_to_mulaw(x) for x in samples)
+    conditioned = gu._condition_external_pcm(samples, rate)
+    encoded = bytes(linear_to_mulaw(x) for x in conditioned)
     decoded = [mulaw_to_linear(x) for x in encoded]
 
-    ref48 = upsample(samples, 3)
-    rt48 = upsample(decoded, 3)
+    if 48000 % rate:
+        raise SystemExit(f"source rate must divide 48000 exactly: {rate}")
+    factor = 48000 // rate
+    ref48 = upsample(conditioned, factor)
+    rt48 = upsample(decoded, factor)
 
     dst.parent.mkdir(parents=True, exist_ok=True)
     with wave.open(str(dst), "wb") as w:
@@ -108,7 +114,8 @@ def main() -> int:
         "source_rate_hz": rate,
         "firmware_output_rate_hz": 48000,
         "encoding": "g711-mulaw-u8",
-        "firmware_interpolation": "linear-x3",
+        "conditioning": "dc-trim-soft-gate-headroom26k-fade6ms",
+        "firmware_interpolation": f"linear-x{factor}",
         "snr_db": snr_db,
         "correlation": corr,
         "peak_abs": peak,
