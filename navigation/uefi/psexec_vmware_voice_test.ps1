@@ -41,9 +41,11 @@ function Invoke-Checked([string]$Exe, [string[]]$Arguments) {
   }
 }
 
-$identity = [Security.Principal.WindowsIdentity]::GetCurrent().Name
-if ($identity -ne 'NT AUTHORITY\SYSTEM') {
-  throw "This stage must run through PsExec as SYSTEM. Current identity: $identity"
+$currentIdentity = [Security.Principal.WindowsIdentity]::GetCurrent()
+$identity = $currentIdentity.Name
+$identitySid = $currentIdentity.User.Value
+if ($identitySid -ne 'S-1-5-18') {
+  throw "This stage must run through PsExec as SYSTEM. Current identity: $identity SID=$identitySid"
 }
 
 'STAGE=IDENTITY_PASS' | Add-Content -LiteralPath $globalStageLog -Encoding ascii
@@ -110,6 +112,7 @@ Write-Host "PSEXEC_SYSTEM_IDENTITY=PASS"
 Write-Host "HOST_ASUS_M1603QA=PASS"
 Write-Host "HOST_RYZEN_5800H=PASS"
 Write-Host "PSEXEC_IDENTITY=$identity"
+Write-Host "PSEXEC_IDENTITY_SID=$identitySid"
 Write-Host "PYTHON=$python"
 Write-Host "CLANG=$clang"
 Write-Host "LLDLINK=$lld"
@@ -311,6 +314,7 @@ $summaryFile = Join-Path $buildDir 'psexec-physical-summary.txt'
 $summary = @(
   'PSEXEC_REQUIRED=PASS',
   "IDENTITY=$identity",
+  "IDENTITY_SID=$identitySid",
   'REAL_WINDOWS_VOICE_BUILD=PASS',
   'VOICE_CODEC_ROUNDTRIP=PASS',
   'AUDIBLE_AB_REFERENCE=PLAYED',
