@@ -56,11 +56,36 @@ $vmrun = Resolve-RequiredFile @(
   "${env:ProgramFiles(x86)}\VMware\VMware Workstation\vmrun.exe"
 ) 'VMware vmrun'
 
+$cs = Get-CimInstance Win32_ComputerSystem
+$cpu = Get-CimInstance Win32_Processor | Select-Object -First 1
+$bios = Get-CimInstance Win32_BIOS
+$os = Get-CimInstance Win32_OperatingSystem
+if ($cs.Model -notmatch 'M1603QA') {
+  throw "Wrong physical target: expected ASUS M1603QA, got '$($cs.Model)'"
+}
+if ($cpu.Name -notmatch 'Ryzen 7 5800H') {
+  throw "Wrong CPU target: expected Ryzen 7 5800H, got '$($cpu.Name)'"
+}
+@(
+  "HOST_MANUFACTURER=$($cs.Manufacturer)",
+  "HOST_MODEL=$($cs.Model)",
+  "HOST_CPU=$($cpu.Name)",
+  "HOST_CORES=$($cpu.NumberOfCores)",
+  "HOST_LOGICAL_PROCESSORS=$($cpu.NumberOfLogicalProcessors)",
+  "HOST_RAM_BYTES=$($cs.TotalPhysicalMemory)",
+  "HOST_BIOS_VERSION=$($bios.SMBIOSBIOSVersion)",
+  "HOST_OS=$($os.Caption)",
+  "HOST_OS_VERSION=$($os.Version)",
+  "HOST_OS_BUILD=$($os.BuildNumber)"
+) | Set-Content -LiteralPath (Join-Path $buildDir 'host-evidence.txt') -Encoding utf8
+
 $voiceDir = Join-Path $buildDir 'system-voice'
 if (Test-Path $voiceDir) { Remove-Item -Recurse -Force $voiceDir }
 New-Item -ItemType Directory -Force -Path $voiceDir | Out-Null
 
 Write-Host "PSEXEC_SYSTEM_IDENTITY=PASS"
+Write-Host "HOST_ASUS_M1603QA=PASS"
+Write-Host "HOST_RYZEN_5800H=PASS"
 Write-Host "PSEXEC_IDENTITY=$identity"
 Write-Host "PYTHON=$python"
 Write-Host "CLANG=$clang"
@@ -72,6 +97,23 @@ Invoke-Checked 'powershell.exe' @(
   '-File',(Join-Path $Workspace 'navigation\uefi\generate_system_voice_assets.ps1'),
   '-OutDir',$voiceDir
 )
+
+$voiceEvidence = Join-Path $voiceDir 'system-voice-evidence.txt'
+if (-not (Test-Path $voiceEvidence)) {
+  throw "system-voice-evidence.txt was not generated"
+}
+$voiceText = Get-Content -Raw -LiteralPath $voiceEvidence
+if ($voiceText -notmatch 'SYSTEM_SPEECH_FR_NATIVE=True') {
+  throw "No native French System.Speech voice is visible under LocalSystem"
+}
+if ($voiceText -notmatch 'SYSTEM_SPEECH_OUTPUT_RATE=16000' -or
+    $voiceText -notmatch 'SYSTEM_SPEECH_OUTPUT_BITS=16' -or
+    $voiceText -notmatch 'SYSTEM_SPEECH_OUTPUT_CHANNELS=1' -or
+    $voiceText -notmatch 'SYSTEM_SPEECH_OUTPUT_ENCODING=PCM') {
+  throw "Windows voice source format contract failed"
+}
+Write-Host "SYSTEM_SPEECH_NATIVE_FR=PASS"
+Get-Content -LiteralPath $voiceEvidence
 
 $qualitySource = Join-Path $voiceDir 'quality_reference.wav'
 if (-not (Test-Path $qualitySource)) {
