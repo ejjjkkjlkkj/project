@@ -23,11 +23,11 @@ $words = @(
   'setup','storage','system','tpm','up','down','usb','value'
 )
 $phrases = @(
-  "Prêt. Appuyez sur F un pour l'aide.",
-  "Flèche haut et flèche bas pour naviguer. Flèches gauche et droite pour modifier.",
-  "Entrée pour activer. Échap pour revenir. F un pour l'aide.",
+  "Prêt. F un, aide.",
+  "Flèches pour naviguer.",
+  "Entrée active. Échap retour.",
   "Aucun changement.",
-  "Aperçu des modifications annulé.",
+  "Modifications annulées.",
   "Coché.",
   "Non coché.",
   "Protégé."
@@ -80,7 +80,7 @@ foreach ($w in $words) {
   Write-VoiceWav ("word_{0}.wav" -f $w) ([string]$w) $en.VoiceInfo.Name 1
 }
 for ($i = 0; $i -lt $phrases.Count; $i++) {
-  Write-VoiceWav ("phrase_{0}.wav" -f $i) ([string]$phrases[$i]) $fr.VoiceInfo.Name 0
+  Write-VoiceWav ("phrase_{0}.wav" -f $i) ([string]$phrases[$i]) $fr.VoiceInfo.Name 1
 }
 
 $generated = @(Get-ChildItem -Path $OutDir -Filter '*.wav')
