@@ -1,91 +1,136 @@
-name: vmware-uefi-selfhosted-psexec
+name: vmware-uefi-selfhosted
 
 on:
+  pull_request:
+    paths:
+      - 'voice/**'
+      - 'navigation/**'
+      - '.github/workflows/vmware-uefi-selfhosted.yml'
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: vmware-uefi-selfhosted-psexec
-  cancel-in-progress: true
+  group: vmware-uefi-selfhosted
+  cancel-in-progress: false
 
 jobs:
-  physical-voice-vmware:
+  psexec-system-voice:
     runs-on: [self-hosted, Windows, X64]
-    timeout-minutes: 25
+    timeout-minutes: 30
 
     steps:
       - name: Checkout
         uses: actions/checkout@v5
 
-      - name: Run all Windows project work through PsExec
+      - name: Run full voice and VMware validation through PsExec SYSTEM
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $psexec = 'C:\Users\adm\Downloads\PsExec64.exe'
-          if (-not (Test-Path -LiteralPath $psexec)) {
-            throw "Required PsExec not found: $psexec"
+          $psExec = 'C:\Users\adm\Downloads\PsExec64.exe'
+          $pwsh = 'C:\Program Files\PowerShell\7\pwsh.exe'
+          if (-not (Test-Path -LiteralPath $psExec)) {
+            throw "Required PsExec64 not found: $psExec"
+          }
+          if (-not (Test-Path -LiteralPath $pwsh)) {
+            throw "PowerShell 7 not found: $pwsh"
           }
 
-          $sessionProbe = & $psexec -accepteula -nobanner -s powershell.exe -NoProfile -Command "(Get-Process explorer -ErrorAction SilentlyContinue | Where-Object { `$_.SessionId -gt 0 } | Select-Object -First 1 -ExpandProperty SessionId)"
-          if ($LASTEXITCODE -ne 0) {
-            throw "PsExec session probe failed with exit code $LASTEXITCODE"
+          $workspace = (Resolve-Path -LiteralPath $env:GITHUB_WORKSPACE).Path
+          $script = Join-Path $workspace 'navigation\uefi\psexec_vmware_voice_test.ps1'
+          if (-not (Test-Path -LiteralPath $script)) {
+            throw "Physical validation script missing: $script"
           }
-          $sessionId = @($sessionProbe | ForEach-Object { "$_".Trim() } | Where-Object { $_ -match '^\d+$' } | Select-Object -Last 1)
-          if (-not $sessionId) {
-            throw "No active Explorer desktop session found. Keep the Windows desktop session logged in."
+
+          # Prefer the runner's interactive desktop session so SYSTEM keeps
+          # access to the audible endpoint. If the runner ever becomes a
+          # service in session 0, reuse an Explorer desktop session instead.
+          $sessionId = (Get-Process -Id $PID).SessionId
+          if ($sessionId -eq 0) {
+            $explorer = Get-Process explorer -ErrorAction SilentlyContinue |
+              Where-Object { $_.SessionId -gt 0 } |
+              Select-Object -First 1
+            if (-not $explorer) {
+              throw 'No interactive desktop session is available for audible PsExec validation.'
+            }
+            $sessionId = $explorer.SessionId
           }
-          $sessionId = [int]$sessionId
-          Write-Host "PSEXEC_PATH=$psexec"
+
+          Write-Host "PSEXEC_EXE=$psExec"
+          Write-Host "PSEXEC_TARGET_IDENTITY=NT AUTHORITY\SYSTEM"
           Write-Host "PSEXEC_INTERACTIVE_SESSION=$sessionId"
 
-          $stage = Join-Path $PWD 'navigation\uefi\psexec_vmware_voice_test.ps1'
-          $args = @(
+          $arguments = @(
             '-accepteula',
             '-nobanner',
             '-s',
-            '-h',
-            '-i',
-            "$sessionId",
-            'powershell.exe',
+            '-i', [string]$sessionId,
+            '-w', $workspace,
+            $pwsh,
+            '-NoLogo',
             '-NoProfile',
-            '-ExecutionPolicy',
-            'Bypass',
-            '-File',
-            $stage,
-            '-Workspace',
-            $PWD.Path,
-            '-RunId',
-            $env:GITHUB_RUN_ID
+            '-ExecutionPolicy', 'Bypass',
+            '-File', $script,
+            '-Workspace', $workspace,
+            '-RunId', [string]$env:GITHUB_RUN_ID
           )
-          & $psexec @args
-
+          & $psExec @arguments
           if ($LASTEXITCODE -ne 0) {
-            throw "PsExec physical pipeline failed with exit code $LASTEXITCODE"
+            throw "PsExec SYSTEM validation failed with exit code $LASTEXITCODE"
           }
 
-          if (-not (Test-Path 'build\psexec-physical-summary.txt')) {
-            throw "PsExec summary evidence missing"
+          $summary = Join-Path $workspace 'build\psexec-physical-summary.txt'
+          if (-not (Test-Path -LiteralPath $summary)) {
+            throw "PsExec summary missing: $summary"
           }
-          Get-Content 'build\psexec-physical-summary.txt'
-          Write-Host 'WINDOWS_PROJECT_EXECUTION_VIA_PSEXEC=PASS'
+          $text = Get-Content -Raw -LiteralPath $summary
+          foreach ($required in @(
+            'PSEXEC_REQUIRED=PASS',
+            'IDENTITY=NT AUTHORITY\SYSTEM',
+            'REAL_WINDOWS_VOICE_BUILD=PASS',
+            'VOICE_CODEC_ROUNDTRIP=PASS',
+            'NAVIGATION_EFI_REAL_VOICE_BUILD=PASS',
+            'VMWARE_UEFI_BOOT=PASS',
+            'VMWARE_SCREENREADER_DISCOVERY=PASS',
+            'SYSTEM_SPEECH_OUTPUT_RATE=24000'
+          )) {
+            if ($text -notmatch [regex]::Escape($required)) {
+              throw "Missing physical proof marker: $required"
+            }
+          }
+          Write-Host 'PSEXEC_SYSTEM_VMWARE_VOICE=PASS'
 
-      - name: Upload PsExec physical evidence
+      - name: Summarize physical evidence
+        if: always()
+        shell: pwsh
+        run: |
+          "## PsExec SYSTEM voice + VMware validation" >> $env:GITHUB_STEP_SUMMARY
+          $summary = Join-Path $env:GITHUB_WORKSPACE 'build\psexec-physical-summary.txt'
+          if (Test-Path -LiteralPath $summary) {
+            Get-Content -LiteralPath $summary | ForEach-Object {
+              "- `$_`" >> $env:GITHUB_STEP_SUMMARY
+            }
+          } else {
+            "- physical summary: missing" >> $env:GITHUB_STEP_SUMMARY
+          }
+
+      - name: Upload PsExec physical voice evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: psexec-physical-voice-vmware-evidence
+          name: psexec-system-voice-vmware-evidence
           path: |
             build/NAVIGATION.EFI
             build/navigation_units.txt
-            build/system-voice/system-voice-evidence.txt
-            build/system-voice/quality_reference.wav
+            build/psexec-physical-summary.txt
+            build/host-evidence.txt
             build/quality-reference-firmware-roundtrip.wav
             build/quality-reference-firmware-roundtrip.json
-            build/psexec-physical-summary.txt
+            build/system-voice/system-voice-evidence.txt
             build/vmware-smoke-*/serial.log
             build/vmware-smoke-*/serial-final.txt
+            build/vmware-smoke-*/vmware.log
             build/vmware-smoke-*/*.vmx
             build/vmware-smoke-*/uefi-floppy.img
           if-no-files-found: warn
