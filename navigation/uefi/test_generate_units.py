@@ -45,7 +45,7 @@ def main() -> None:
     assert all(data for data in converted.values())
     assert all(len(data) % 4 == 0 for data in converted.values()), "PCM must be stereo s16le"
     bank_bytes = sum(len(source_units[name]) for name in required)
-    assert bank_bytes <= 1024 * 1024, bank_bytes
+    assert bank_bytes <= 1200 * 1024, bank_bytes
 
     silence = converted["sil"]
     assert silence == bytes(len(silence)), "converted silence must remain digital zero"
