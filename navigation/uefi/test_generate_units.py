@@ -4,7 +4,8 @@ from __future__ import annotations
 from generate_units import (
     DIGIT_UNITS, LETTER_UNITS, WORD_NAME_STRIDE, WORD_UNIT_STRIDE,
     WORD_UNITS, PHRASE_TEXTS, SOURCE_RATE, convert, load_source, make_source_units,
-    _phrase_unit_name,
+    _phrase_unit_name, _condition_external_pcm, _active_word_units,
+    EXTERNAL_WORD_PRIORITY,
 )
 
 MAX_BANK_BYTES = 128 * 4096 - 0x1000
@@ -36,6 +37,13 @@ def main() -> None:
     assert max(map(len, WORD_UNITS)) < WORD_NAME_STRIDE
     assert max(map(len, WORD_UNITS.values())) <= WORD_UNIT_STRIDE
     assert all(word.isascii() and word.islower() for word in WORD_UNITS)
+
+    physical_words = _active_word_units(True)
+    assert set(physical_words) == set(WORD_UNITS)
+    for word in EXTERNAL_WORD_PRIORITY:
+        assert physical_words[word] == (f"word_{word}",)
+    for word in set(WORD_UNITS) - set(EXTERNAL_WORD_PRIORITY):
+        assert physical_words[word] == tuple(f"letter_{ch}" for ch in word)
     assert len(PHRASE_TEXTS) >= 6
     assert "ready press f1 for help" in PHRASE_TEXTS
     assert "no change" in PHRASE_TEXTS
@@ -49,6 +57,27 @@ def main() -> None:
 
     silence = converted["sil"]
     assert silence == bytes(len(silence)), "converted silence must remain digital zero"
+
+    # Physical-voice conditioning must remove DC, preserve headroom and force
+    # click-free clip boundaries before mu-law companding.
+    guard = SOURCE_RATE * 40 // 1000
+    body = []
+    for i in range(SOURCE_RATE // 5):
+        signal = 11000 if ((i // 31) & 1) else -11000
+        body.append(signal + 700)
+    conditioned = _condition_external_pcm(([700] * guard) + body + ([700] * guard), SOURCE_RATE)
+    assert conditioned
+    assert conditioned[0] == 0 and conditioned[-1] == 0
+    assert max(abs(x) for x in conditioned) <= 26000
+    assert max(abs(x) for x in conditioned) >= 25500
+    assert abs(sum(conditioned) / len(conditioned)) < 1000
+
+    try:
+        _condition_external_pcm([10] * (SOURCE_RATE // 10), SOURCE_RATE)
+    except SystemExit:
+        pass
+    else:
+        raise AssertionError("noise-only external PCM must be rejected")
 
     print(f"source-rate={SOURCE_RATE}")
     print(f"unit-count={len(converted)}")
