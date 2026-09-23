@@ -153,6 +153,768 @@ Invoke-Checked $python @(
   $unitsMeta
 )
 
+$unitsText = Get-Content -Raw -LiteralPath $unitsMeta
+$priorityWordMatch = [regex]::Match($unitsText, '(?m)^physical-priority-word-count=(\d+)  '--target=x86_64-pc-windows-msvc',
+  '-DQEV_INTERACTIVE_NAV=1',
+  '-ffreestanding',
+  '-fshort-wchar',
+  '-fno-stack-protector',
+  '-fno-builtin',
+  '-mno-red-zone',
+  '-nostdlib',
+  '-O2',
+  '-Wall',
+  '-Wextra',
+  '-Werror'
+)
+
+Invoke-Checked $clang ($flags + @(
+  '-c',(Join-Path $Workspace 'navigation\uefi\semantic_core.c'),
+  '-o',(Join-Path $buildDir 'semantic_core.obj')
+))
+Invoke-Checked $clang ($flags + @(
+  '-c',(Join-Path $Workspace 'navigation\uefi\hii_graph_prompt_speech_uefi.c'),
+  '-o',(Join-Path $buildDir 'navigation.obj')
+))
+Invoke-Checked $clang ($flags + @(
+  '-c',$unitsC,
+  '-o',(Join-Path $buildDir 'navigation_units.obj')
+))
+
+$efi = Join-Path $buildDir 'NAVIGATION.EFI'
+Invoke-Checked $lld @(
+  '/subsystem:efi_application',
+  '/entry:efi_main',
+  '/nodefaultlib',
+  '/machine:x64',
+  '/timestamp:0',
+  "/out:$efi",
+  (Join-Path $buildDir 'navigation.obj'),
+  (Join-Path $buildDir 'navigation_units.obj'),
+  (Join-Path $buildDir 'semantic_core.obj')
+)
+if (-not (Test-Path $efi) -or (Get-Item $efi).Length -lt 65536) {
+  throw "NAVIGATION.EFI missing or unexpectedly small"
+}
+Write-Host "NAVIGATION_EFI_REAL_VOICE_BUILD=PASS"
+
+$vmDir = Join-Path $buildDir ("vmware-smoke-" + $RunId)
+if (Test-Path $vmDir) { Remove-Item -Recurse -Force $vmDir }
+New-Item -ItemType Directory -Force -Path $vmDir | Out-Null
+
+$img = Join-Path $vmDir 'uefi-floppy.img'
+Invoke-Checked $python @(
+  (Join-Path $Workspace 'navigation\uefi\create_fat12_boot_image.py'),
+  $efi,
+  $img
+)
+
+$vmx = Join-Path $vmDir 'qevarynx-uefi.vmx'
+@'
+.encoding = "windows-1252"
+config.version = "8"
+virtualHW.version = "20"
+displayName = "QEVARYNOX UEFI PsExec Voice CI"
+guestOS = "other-64"
+firmware = "efi"
+uefi.secureBoot.enabled = "FALSE"
+memsize = "512"
+numvcpus = "1"
+cpuid.coresPerSocket = "1"
+floppy0.present = "TRUE"
+floppy0.fileType = "file"
+floppy0.fileName = "uefi-floppy.img"
+floppy0.startConnected = "TRUE"
+bios.bootOrder = "floppy"
+serial0.present = "TRUE"
+serial0.fileType = "file"
+serial0.fileName = "serial.log"
+serial0.tryNoRxLoss = "FALSE"
+sound.present = "TRUE"
+sound.virtualDev = "hdaudio"
+sound.autodetect = "TRUE"
+ethernet0.present = "FALSE"
+usb.present = "FALSE"
+tools.syncTime = "FALSE"
+'@ | Set-Content -LiteralPath $vmx -Encoding ascii
+
+$serial = Join-Path $vmDir 'serial.log'
+try {
+  Invoke-Checked $vmrun @('-T','ws','start',$vmx,'nogui')
+
+  $deadline = (Get-Date).AddSeconds(75)
+  while ((Get-Date) -lt $deadline) {
+    if (Test-Path $serial) {
+      $serialText = Get-Content -Raw -LiteralPath $serial -ErrorAction SilentlyContinue
+      if ($serialText -match 'HII_GRAPH_NAV_DISCOVERY_PROMPT=PASS' -or $serialText -match 'STATUS=BLOCKED') {
+        break
+      }
+    }
+    Start-Sleep -Milliseconds 500
+  }
+
+  if (-not (Test-Path $serial)) {
+    throw "VMware serial log missing; EFI did not reach COM output"
+  }
+  $serialText = Get-Content -Raw -LiteralPath $serial
+  $serialFinal = Join-Path $vmDir 'serial-final.txt'
+  $serialText | Set-Content -LiteralPath $serialFinal -Encoding utf8
+
+  if ($serialText -notmatch 'QEVARYNOX-UEFI-HII-GRAPH-PROMPT-SPEECH-V1') {
+    throw "VMware did not execute NAVIGATION.EFI"
+  }
+  if ($serialText -notmatch 'STATE=START') {
+    throw "EFI entry marker missing"
+  }
+  if ($serialText -notmatch 'HII_GRAPH_NAV_DISCOVERY_PROMPT=PASS') {
+    $reason = [regex]::Match($serialText, 'REASON=([^\r\n]+)').Groups[1].Value
+    if (-not $reason) { $reason = 'DISCOVERY_PROMPT_NOT_REACHED' }
+    throw "UEFI speech discovery failed: $reason"
+  }
+
+  Write-Host "VMWARE_UEFI_BOOT=PASS"
+  Write-Host "VMWARE_SCREENREADER_DISCOVERY=PASS"
+  if ($serialText -match 'HDA_CONTROLLER_CODEC=PASS') {
+    Write-Host "VMWARE_HDA_DISCOVERY=PASS"
+  } else {
+    Write-Host "VMWARE_HDA_DISCOVERY=NOT_ESTABLISHED"
+  }
+}
+finally {
+  & $vmrun -T ws stop $vmx hard 2>$null
+}
+
+$evidenceFile = Join-Path $voiceDir 'system-voice-evidence.txt'
+$summaryFile = Join-Path $buildDir 'psexec-physical-summary.txt'
+$summary = @(
+  'PSEXEC_REQUIRED=PASS',
+  "PSEXEC64_PATH=$psExecPath",
+  "IDENTITY=$identity",
+  'REAL_WINDOWS_VOICE_BUILD=PASS',
+  'REAL_WINDOWS_VOICE_BANK_COMPLETE=PASS',
+  "REAL_WINDOWS_VOICE_UNIT_COUNT=$realVoiceCount",
+  'VOICE_CODEC_ROUNDTRIP=PASS',
+  'AUDIBLE_AB_REFERENCE=PLAYED',
+  'NAVIGATION_EFI_REAL_VOICE_BUILD=PASS',
+  'VMWARE_UEFI_BOOT=PASS',
+  'VMWARE_SCREENREADER_DISCOVERY=PASS'
+)
+if (Test-Path $evidenceFile) {
+  $summary += Get-Content -LiteralPath $evidenceFile
+}
+$summary | Set-Content -LiteralPath $summaryFile -Encoding utf8
+Write-Host "PSEXEC_PHYSICAL_PIPELINE=PASS"
+)
+$realCountMatch = [regex]::Match($unitsText, '(?m)^real-voice-unit-count=(\d+)  '--target=x86_64-pc-windows-msvc',
+  '-DQEV_INTERACTIVE_NAV=1',
+  '-ffreestanding',
+  '-fshort-wchar',
+  '-fno-stack-protector',
+  '-fno-builtin',
+  '-mno-red-zone',
+  '-nostdlib',
+  '-O2',
+  '-Wall',
+  '-Wextra',
+  '-Werror'
+)
+
+Invoke-Checked $clang ($flags + @(
+  '-c',(Join-Path $Workspace 'navigation\uefi\semantic_core.c'),
+  '-o',(Join-Path $buildDir 'semantic_core.obj')
+))
+Invoke-Checked $clang ($flags + @(
+  '-c',(Join-Path $Workspace 'navigation\uefi\hii_graph_prompt_speech_uefi.c'),
+  '-o',(Join-Path $buildDir 'navigation.obj')
+))
+Invoke-Checked $clang ($flags + @(
+  '-c',$unitsC,
+  '-o',(Join-Path $buildDir 'navigation_units.obj')
+))
+
+$efi = Join-Path $buildDir 'NAVIGATION.EFI'
+Invoke-Checked $lld @(
+  '/subsystem:efi_application',
+  '/entry:efi_main',
+  '/nodefaultlib',
+  '/machine:x64',
+  '/timestamp:0',
+  "/out:$efi",
+  (Join-Path $buildDir 'navigation.obj'),
+  (Join-Path $buildDir 'navigation_units.obj'),
+  (Join-Path $buildDir 'semantic_core.obj')
+)
+if (-not (Test-Path $efi) -or (Get-Item $efi).Length -lt 65536) {
+  throw "NAVIGATION.EFI missing or unexpectedly small"
+}
+Write-Host "NAVIGATION_EFI_REAL_VOICE_BUILD=PASS"
+
+$vmDir = Join-Path $buildDir ("vmware-smoke-" + $RunId)
+if (Test-Path $vmDir) { Remove-Item -Recurse -Force $vmDir }
+New-Item -ItemType Directory -Force -Path $vmDir | Out-Null
+
+$img = Join-Path $vmDir 'uefi-floppy.img'
+Invoke-Checked $python @(
+  (Join-Path $Workspace 'navigation\uefi\create_fat12_boot_image.py'),
+  $efi,
+  $img
+)
+
+$vmx = Join-Path $vmDir 'qevarynx-uefi.vmx'
+@'
+.encoding = "windows-1252"
+config.version = "8"
+virtualHW.version = "20"
+displayName = "QEVARYNOX UEFI PsExec Voice CI"
+guestOS = "other-64"
+firmware = "efi"
+uefi.secureBoot.enabled = "FALSE"
+memsize = "512"
+numvcpus = "1"
+cpuid.coresPerSocket = "1"
+floppy0.present = "TRUE"
+floppy0.fileType = "file"
+floppy0.fileName = "uefi-floppy.img"
+floppy0.startConnected = "TRUE"
+bios.bootOrder = "floppy"
+serial0.present = "TRUE"
+serial0.fileType = "file"
+serial0.fileName = "serial.log"
+serial0.tryNoRxLoss = "FALSE"
+sound.present = "TRUE"
+sound.virtualDev = "hdaudio"
+sound.autodetect = "TRUE"
+ethernet0.present = "FALSE"
+usb.present = "FALSE"
+tools.syncTime = "FALSE"
+'@ | Set-Content -LiteralPath $vmx -Encoding ascii
+
+$serial = Join-Path $vmDir 'serial.log'
+try {
+  Invoke-Checked $vmrun @('-T','ws','start',$vmx,'nogui')
+
+  $deadline = (Get-Date).AddSeconds(75)
+  while ((Get-Date) -lt $deadline) {
+    if (Test-Path $serial) {
+      $serialText = Get-Content -Raw -LiteralPath $serial -ErrorAction SilentlyContinue
+      if ($serialText -match 'HII_GRAPH_NAV_DISCOVERY_PROMPT=PASS' -or $serialText -match 'STATUS=BLOCKED') {
+        break
+      }
+    }
+    Start-Sleep -Milliseconds 500
+  }
+
+  if (-not (Test-Path $serial)) {
+    throw "VMware serial log missing; EFI did not reach COM output"
+  }
+  $serialText = Get-Content -Raw -LiteralPath $serial
+  $serialFinal = Join-Path $vmDir 'serial-final.txt'
+  $serialText | Set-Content -LiteralPath $serialFinal -Encoding utf8
+
+  if ($serialText -notmatch 'QEVARYNOX-UEFI-HII-GRAPH-PROMPT-SPEECH-V1') {
+    throw "VMware did not execute NAVIGATION.EFI"
+  }
+  if ($serialText -notmatch 'STATE=START') {
+    throw "EFI entry marker missing"
+  }
+  if ($serialText -notmatch 'HII_GRAPH_NAV_DISCOVERY_PROMPT=PASS') {
+    $reason = [regex]::Match($serialText, 'REASON=([^\r\n]+)').Groups[1].Value
+    if (-not $reason) { $reason = 'DISCOVERY_PROMPT_NOT_REACHED' }
+    throw "UEFI speech discovery failed: $reason"
+  }
+
+  Write-Host "VMWARE_UEFI_BOOT=PASS"
+  Write-Host "VMWARE_SCREENREADER_DISCOVERY=PASS"
+  if ($serialText -match 'HDA_CONTROLLER_CODEC=PASS') {
+    Write-Host "VMWARE_HDA_DISCOVERY=PASS"
+  } else {
+    Write-Host "VMWARE_HDA_DISCOVERY=NOT_ESTABLISHED"
+  }
+}
+finally {
+  & $vmrun -T ws stop $vmx hard 2>$null
+}
+
+$evidenceFile = Join-Path $voiceDir 'system-voice-evidence.txt'
+$summaryFile = Join-Path $buildDir 'psexec-physical-summary.txt'
+$summary = @(
+  'PSEXEC_REQUIRED=PASS',
+  "PSEXEC64_PATH=$psExecPath",
+  "IDENTITY=$identity",
+  'REAL_WINDOWS_VOICE_BUILD=PASS',
+  'VOICE_CODEC_ROUNDTRIP=PASS',
+  'AUDIBLE_AB_REFERENCE=PLAYED',
+  'NAVIGATION_EFI_REAL_VOICE_BUILD=PASS',
+  'VMWARE_UEFI_BOOT=PASS',
+  'VMWARE_SCREENREADER_DISCOVERY=PASS'
+)
+if (Test-Path $evidenceFile) {
+  $summary += Get-Content -LiteralPath $evidenceFile
+}
+$summary | Set-Content -LiteralPath $summaryFile -Encoding utf8
+Write-Host "PSEXEC_PHYSICAL_PIPELINE=PASS"
+)
+$skippedMatch = [regex]::Match($unitsText, '(?m)^real-voice-skipped-count=(\d+)  '--target=x86_64-pc-windows-msvc',
+  '-DQEV_INTERACTIVE_NAV=1',
+  '-ffreestanding',
+  '-fshort-wchar',
+  '-fno-stack-protector',
+  '-fno-builtin',
+  '-mno-red-zone',
+  '-nostdlib',
+  '-O2',
+  '-Wall',
+  '-Wextra',
+  '-Werror'
+)
+
+Invoke-Checked $clang ($flags + @(
+  '-c',(Join-Path $Workspace 'navigation\uefi\semantic_core.c'),
+  '-o',(Join-Path $buildDir 'semantic_core.obj')
+))
+Invoke-Checked $clang ($flags + @(
+  '-c',(Join-Path $Workspace 'navigation\uefi\hii_graph_prompt_speech_uefi.c'),
+  '-o',(Join-Path $buildDir 'navigation.obj')
+))
+Invoke-Checked $clang ($flags + @(
+  '-c',$unitsC,
+  '-o',(Join-Path $buildDir 'navigation_units.obj')
+))
+
+$efi = Join-Path $buildDir 'NAVIGATION.EFI'
+Invoke-Checked $lld @(
+  '/subsystem:efi_application',
+  '/entry:efi_main',
+  '/nodefaultlib',
+  '/machine:x64',
+  '/timestamp:0',
+  "/out:$efi",
+  (Join-Path $buildDir 'navigation.obj'),
+  (Join-Path $buildDir 'navigation_units.obj'),
+  (Join-Path $buildDir 'semantic_core.obj')
+)
+if (-not (Test-Path $efi) -or (Get-Item $efi).Length -lt 65536) {
+  throw "NAVIGATION.EFI missing or unexpectedly small"
+}
+Write-Host "NAVIGATION_EFI_REAL_VOICE_BUILD=PASS"
+
+$vmDir = Join-Path $buildDir ("vmware-smoke-" + $RunId)
+if (Test-Path $vmDir) { Remove-Item -Recurse -Force $vmDir }
+New-Item -ItemType Directory -Force -Path $vmDir | Out-Null
+
+$img = Join-Path $vmDir 'uefi-floppy.img'
+Invoke-Checked $python @(
+  (Join-Path $Workspace 'navigation\uefi\create_fat12_boot_image.py'),
+  $efi,
+  $img
+)
+
+$vmx = Join-Path $vmDir 'qevarynx-uefi.vmx'
+@'
+.encoding = "windows-1252"
+config.version = "8"
+virtualHW.version = "20"
+displayName = "QEVARYNOX UEFI PsExec Voice CI"
+guestOS = "other-64"
+firmware = "efi"
+uefi.secureBoot.enabled = "FALSE"
+memsize = "512"
+numvcpus = "1"
+cpuid.coresPerSocket = "1"
+floppy0.present = "TRUE"
+floppy0.fileType = "file"
+floppy0.fileName = "uefi-floppy.img"
+floppy0.startConnected = "TRUE"
+bios.bootOrder = "floppy"
+serial0.present = "TRUE"
+serial0.fileType = "file"
+serial0.fileName = "serial.log"
+serial0.tryNoRxLoss = "FALSE"
+sound.present = "TRUE"
+sound.virtualDev = "hdaudio"
+sound.autodetect = "TRUE"
+ethernet0.present = "FALSE"
+usb.present = "FALSE"
+tools.syncTime = "FALSE"
+'@ | Set-Content -LiteralPath $vmx -Encoding ascii
+
+$serial = Join-Path $vmDir 'serial.log'
+try {
+  Invoke-Checked $vmrun @('-T','ws','start',$vmx,'nogui')
+
+  $deadline = (Get-Date).AddSeconds(75)
+  while ((Get-Date) -lt $deadline) {
+    if (Test-Path $serial) {
+      $serialText = Get-Content -Raw -LiteralPath $serial -ErrorAction SilentlyContinue
+      if ($serialText -match 'HII_GRAPH_NAV_DISCOVERY_PROMPT=PASS' -or $serialText -match 'STATUS=BLOCKED') {
+        break
+      }
+    }
+    Start-Sleep -Milliseconds 500
+  }
+
+  if (-not (Test-Path $serial)) {
+    throw "VMware serial log missing; EFI did not reach COM output"
+  }
+  $serialText = Get-Content -Raw -LiteralPath $serial
+  $serialFinal = Join-Path $vmDir 'serial-final.txt'
+  $serialText | Set-Content -LiteralPath $serialFinal -Encoding utf8
+
+  if ($serialText -notmatch 'QEVARYNOX-UEFI-HII-GRAPH-PROMPT-SPEECH-V1') {
+    throw "VMware did not execute NAVIGATION.EFI"
+  }
+  if ($serialText -notmatch 'STATE=START') {
+    throw "EFI entry marker missing"
+  }
+  if ($serialText -notmatch 'HII_GRAPH_NAV_DISCOVERY_PROMPT=PASS') {
+    $reason = [regex]::Match($serialText, 'REASON=([^\r\n]+)').Groups[1].Value
+    if (-not $reason) { $reason = 'DISCOVERY_PROMPT_NOT_REACHED' }
+    throw "UEFI speech discovery failed: $reason"
+  }
+
+  Write-Host "VMWARE_UEFI_BOOT=PASS"
+  Write-Host "VMWARE_SCREENREADER_DISCOVERY=PASS"
+  if ($serialText -match 'HDA_CONTROLLER_CODEC=PASS') {
+    Write-Host "VMWARE_HDA_DISCOVERY=PASS"
+  } else {
+    Write-Host "VMWARE_HDA_DISCOVERY=NOT_ESTABLISHED"
+  }
+}
+finally {
+  & $vmrun -T ws stop $vmx hard 2>$null
+}
+
+$evidenceFile = Join-Path $voiceDir 'system-voice-evidence.txt'
+$summaryFile = Join-Path $buildDir 'psexec-physical-summary.txt'
+$summary = @(
+  'PSEXEC_REQUIRED=PASS',
+  "PSEXEC64_PATH=$psExecPath",
+  "IDENTITY=$identity",
+  'REAL_WINDOWS_VOICE_BUILD=PASS',
+  'VOICE_CODEC_ROUNDTRIP=PASS',
+  'AUDIBLE_AB_REFERENCE=PLAYED',
+  'NAVIGATION_EFI_REAL_VOICE_BUILD=PASS',
+  'VMWARE_UEFI_BOOT=PASS',
+  'VMWARE_SCREENREADER_DISCOVERY=PASS'
+)
+if (Test-Path $evidenceFile) {
+  $summary += Get-Content -LiteralPath $evidenceFile
+}
+$summary | Set-Content -LiteralPath $summaryFile -Encoding utf8
+Write-Host "PSEXEC_PHYSICAL_PIPELINE=PASS"
+)
+if (-not $priorityWordMatch.Success -or -not $realCountMatch.Success -or -not $skippedMatch.Success) {
+  throw "Real-voice bank coverage metadata missing"
+}
+$priorityWordCount = [int]$priorityWordMatch.Groups[1].Value
+$realVoiceCount = [int]$realCountMatch.Groups[1].Value
+$skippedVoiceCount = [int]$skippedMatch.Groups[1].Value
+$expectedRealVoiceCount = 8 + 26 + 10 + $priorityWordCount
+if ($unitsText -notmatch '(?m)^real-voice-source=windows-system-speech  '--target=x86_64-pc-windows-msvc',
+  '-DQEV_INTERACTIVE_NAV=1',
+  '-ffreestanding',
+  '-fshort-wchar',
+  '-fno-stack-protector',
+  '-fno-builtin',
+  '-mno-red-zone',
+  '-nostdlib',
+  '-O2',
+  '-Wall',
+  '-Wextra',
+  '-Werror'
+)
+
+Invoke-Checked $clang ($flags + @(
+  '-c',(Join-Path $Workspace 'navigation\uefi\semantic_core.c'),
+  '-o',(Join-Path $buildDir 'semantic_core.obj')
+))
+Invoke-Checked $clang ($flags + @(
+  '-c',(Join-Path $Workspace 'navigation\uefi\hii_graph_prompt_speech_uefi.c'),
+  '-o',(Join-Path $buildDir 'navigation.obj')
+))
+Invoke-Checked $clang ($flags + @(
+  '-c',$unitsC,
+  '-o',(Join-Path $buildDir 'navigation_units.obj')
+))
+
+$efi = Join-Path $buildDir 'NAVIGATION.EFI'
+Invoke-Checked $lld @(
+  '/subsystem:efi_application',
+  '/entry:efi_main',
+  '/nodefaultlib',
+  '/machine:x64',
+  '/timestamp:0',
+  "/out:$efi",
+  (Join-Path $buildDir 'navigation.obj'),
+  (Join-Path $buildDir 'navigation_units.obj'),
+  (Join-Path $buildDir 'semantic_core.obj')
+)
+if (-not (Test-Path $efi) -or (Get-Item $efi).Length -lt 65536) {
+  throw "NAVIGATION.EFI missing or unexpectedly small"
+}
+Write-Host "NAVIGATION_EFI_REAL_VOICE_BUILD=PASS"
+
+$vmDir = Join-Path $buildDir ("vmware-smoke-" + $RunId)
+if (Test-Path $vmDir) { Remove-Item -Recurse -Force $vmDir }
+New-Item -ItemType Directory -Force -Path $vmDir | Out-Null
+
+$img = Join-Path $vmDir 'uefi-floppy.img'
+Invoke-Checked $python @(
+  (Join-Path $Workspace 'navigation\uefi\create_fat12_boot_image.py'),
+  $efi,
+  $img
+)
+
+$vmx = Join-Path $vmDir 'qevarynx-uefi.vmx'
+@'
+.encoding = "windows-1252"
+config.version = "8"
+virtualHW.version = "20"
+displayName = "QEVARYNOX UEFI PsExec Voice CI"
+guestOS = "other-64"
+firmware = "efi"
+uefi.secureBoot.enabled = "FALSE"
+memsize = "512"
+numvcpus = "1"
+cpuid.coresPerSocket = "1"
+floppy0.present = "TRUE"
+floppy0.fileType = "file"
+floppy0.fileName = "uefi-floppy.img"
+floppy0.startConnected = "TRUE"
+bios.bootOrder = "floppy"
+serial0.present = "TRUE"
+serial0.fileType = "file"
+serial0.fileName = "serial.log"
+serial0.tryNoRxLoss = "FALSE"
+sound.present = "TRUE"
+sound.virtualDev = "hdaudio"
+sound.autodetect = "TRUE"
+ethernet0.present = "FALSE"
+usb.present = "FALSE"
+tools.syncTime = "FALSE"
+'@ | Set-Content -LiteralPath $vmx -Encoding ascii
+
+$serial = Join-Path $vmDir 'serial.log'
+try {
+  Invoke-Checked $vmrun @('-T','ws','start',$vmx,'nogui')
+
+  $deadline = (Get-Date).AddSeconds(75)
+  while ((Get-Date) -lt $deadline) {
+    if (Test-Path $serial) {
+      $serialText = Get-Content -Raw -LiteralPath $serial -ErrorAction SilentlyContinue
+      if ($serialText -match 'HII_GRAPH_NAV_DISCOVERY_PROMPT=PASS' -or $serialText -match 'STATUS=BLOCKED') {
+        break
+      }
+    }
+    Start-Sleep -Milliseconds 500
+  }
+
+  if (-not (Test-Path $serial)) {
+    throw "VMware serial log missing; EFI did not reach COM output"
+  }
+  $serialText = Get-Content -Raw -LiteralPath $serial
+  $serialFinal = Join-Path $vmDir 'serial-final.txt'
+  $serialText | Set-Content -LiteralPath $serialFinal -Encoding utf8
+
+  if ($serialText -notmatch 'QEVARYNOX-UEFI-HII-GRAPH-PROMPT-SPEECH-V1') {
+    throw "VMware did not execute NAVIGATION.EFI"
+  }
+  if ($serialText -notmatch 'STATE=START') {
+    throw "EFI entry marker missing"
+  }
+  if ($serialText -notmatch 'HII_GRAPH_NAV_DISCOVERY_PROMPT=PASS') {
+    $reason = [regex]::Match($serialText, 'REASON=([^\r\n]+)').Groups[1].Value
+    if (-not $reason) { $reason = 'DISCOVERY_PROMPT_NOT_REACHED' }
+    throw "UEFI speech discovery failed: $reason"
+  }
+
+  Write-Host "VMWARE_UEFI_BOOT=PASS"
+  Write-Host "VMWARE_SCREENREADER_DISCOVERY=PASS"
+  if ($serialText -match 'HDA_CONTROLLER_CODEC=PASS') {
+    Write-Host "VMWARE_HDA_DISCOVERY=PASS"
+  } else {
+    Write-Host "VMWARE_HDA_DISCOVERY=NOT_ESTABLISHED"
+  }
+}
+finally {
+  & $vmrun -T ws stop $vmx hard 2>$null
+}
+
+$evidenceFile = Join-Path $voiceDir 'system-voice-evidence.txt'
+$summaryFile = Join-Path $buildDir 'psexec-physical-summary.txt'
+$summary = @(
+  'PSEXEC_REQUIRED=PASS',
+  "PSEXEC64_PATH=$psExecPath",
+  "IDENTITY=$identity",
+  'REAL_WINDOWS_VOICE_BUILD=PASS',
+  'VOICE_CODEC_ROUNDTRIP=PASS',
+  'AUDIBLE_AB_REFERENCE=PLAYED',
+  'NAVIGATION_EFI_REAL_VOICE_BUILD=PASS',
+  'VMWARE_UEFI_BOOT=PASS',
+  'VMWARE_SCREENREADER_DISCOVERY=PASS'
+)
+if (Test-Path $evidenceFile) {
+  $summary += Get-Content -LiteralPath $evidenceFile
+}
+$summary | Set-Content -LiteralPath $summaryFile -Encoding utf8
+Write-Host "PSEXEC_PHYSICAL_PIPELINE=PASS"
+ -or
+    $unitsText -notmatch '(?m)^full-utterance-asset=true  '--target=x86_64-pc-windows-msvc',
+  '-DQEV_INTERACTIVE_NAV=1',
+  '-ffreestanding',
+  '-fshort-wchar',
+  '-fno-stack-protector',
+  '-fno-builtin',
+  '-mno-red-zone',
+  '-nostdlib',
+  '-O2',
+  '-Wall',
+  '-Wextra',
+  '-Werror'
+)
+
+Invoke-Checked $clang ($flags + @(
+  '-c',(Join-Path $Workspace 'navigation\uefi\semantic_core.c'),
+  '-o',(Join-Path $buildDir 'semantic_core.obj')
+))
+Invoke-Checked $clang ($flags + @(
+  '-c',(Join-Path $Workspace 'navigation\uefi\hii_graph_prompt_speech_uefi.c'),
+  '-o',(Join-Path $buildDir 'navigation.obj')
+))
+Invoke-Checked $clang ($flags + @(
+  '-c',$unitsC,
+  '-o',(Join-Path $buildDir 'navigation_units.obj')
+))
+
+$efi = Join-Path $buildDir 'NAVIGATION.EFI'
+Invoke-Checked $lld @(
+  '/subsystem:efi_application',
+  '/entry:efi_main',
+  '/nodefaultlib',
+  '/machine:x64',
+  '/timestamp:0',
+  "/out:$efi",
+  (Join-Path $buildDir 'navigation.obj'),
+  (Join-Path $buildDir 'navigation_units.obj'),
+  (Join-Path $buildDir 'semantic_core.obj')
+)
+if (-not (Test-Path $efi) -or (Get-Item $efi).Length -lt 65536) {
+  throw "NAVIGATION.EFI missing or unexpectedly small"
+}
+Write-Host "NAVIGATION_EFI_REAL_VOICE_BUILD=PASS"
+
+$vmDir = Join-Path $buildDir ("vmware-smoke-" + $RunId)
+if (Test-Path $vmDir) { Remove-Item -Recurse -Force $vmDir }
+New-Item -ItemType Directory -Force -Path $vmDir | Out-Null
+
+$img = Join-Path $vmDir 'uefi-floppy.img'
+Invoke-Checked $python @(
+  (Join-Path $Workspace 'navigation\uefi\create_fat12_boot_image.py'),
+  $efi,
+  $img
+)
+
+$vmx = Join-Path $vmDir 'qevarynx-uefi.vmx'
+@'
+.encoding = "windows-1252"
+config.version = "8"
+virtualHW.version = "20"
+displayName = "QEVARYNOX UEFI PsExec Voice CI"
+guestOS = "other-64"
+firmware = "efi"
+uefi.secureBoot.enabled = "FALSE"
+memsize = "512"
+numvcpus = "1"
+cpuid.coresPerSocket = "1"
+floppy0.present = "TRUE"
+floppy0.fileType = "file"
+floppy0.fileName = "uefi-floppy.img"
+floppy0.startConnected = "TRUE"
+bios.bootOrder = "floppy"
+serial0.present = "TRUE"
+serial0.fileType = "file"
+serial0.fileName = "serial.log"
+serial0.tryNoRxLoss = "FALSE"
+sound.present = "TRUE"
+sound.virtualDev = "hdaudio"
+sound.autodetect = "TRUE"
+ethernet0.present = "FALSE"
+usb.present = "FALSE"
+tools.syncTime = "FALSE"
+'@ | Set-Content -LiteralPath $vmx -Encoding ascii
+
+$serial = Join-Path $vmDir 'serial.log'
+try {
+  Invoke-Checked $vmrun @('-T','ws','start',$vmx,'nogui')
+
+  $deadline = (Get-Date).AddSeconds(75)
+  while ((Get-Date) -lt $deadline) {
+    if (Test-Path $serial) {
+      $serialText = Get-Content -Raw -LiteralPath $serial -ErrorAction SilentlyContinue
+      if ($serialText -match 'HII_GRAPH_NAV_DISCOVERY_PROMPT=PASS' -or $serialText -match 'STATUS=BLOCKED') {
+        break
+      }
+    }
+    Start-Sleep -Milliseconds 500
+  }
+
+  if (-not (Test-Path $serial)) {
+    throw "VMware serial log missing; EFI did not reach COM output"
+  }
+  $serialText = Get-Content -Raw -LiteralPath $serial
+  $serialFinal = Join-Path $vmDir 'serial-final.txt'
+  $serialText | Set-Content -LiteralPath $serialFinal -Encoding utf8
+
+  if ($serialText -notmatch 'QEVARYNOX-UEFI-HII-GRAPH-PROMPT-SPEECH-V1') {
+    throw "VMware did not execute NAVIGATION.EFI"
+  }
+  if ($serialText -notmatch 'STATE=START') {
+    throw "EFI entry marker missing"
+  }
+  if ($serialText -notmatch 'HII_GRAPH_NAV_DISCOVERY_PROMPT=PASS') {
+    $reason = [regex]::Match($serialText, 'REASON=([^\r\n]+)').Groups[1].Value
+    if (-not $reason) { $reason = 'DISCOVERY_PROMPT_NOT_REACHED' }
+    throw "UEFI speech discovery failed: $reason"
+  }
+
+  Write-Host "VMWARE_UEFI_BOOT=PASS"
+  Write-Host "VMWARE_SCREENREADER_DISCOVERY=PASS"
+  if ($serialText -match 'HDA_CONTROLLER_CODEC=PASS') {
+    Write-Host "VMWARE_HDA_DISCOVERY=PASS"
+  } else {
+    Write-Host "VMWARE_HDA_DISCOVERY=NOT_ESTABLISHED"
+  }
+}
+finally {
+  & $vmrun -T ws stop $vmx hard 2>$null
+}
+
+$evidenceFile = Join-Path $voiceDir 'system-voice-evidence.txt'
+$summaryFile = Join-Path $buildDir 'psexec-physical-summary.txt'
+$summary = @(
+  'PSEXEC_REQUIRED=PASS',
+  "PSEXEC64_PATH=$psExecPath",
+  "IDENTITY=$identity",
+  'REAL_WINDOWS_VOICE_BUILD=PASS',
+  'VOICE_CODEC_ROUNDTRIP=PASS',
+  'AUDIBLE_AB_REFERENCE=PLAYED',
+  'NAVIGATION_EFI_REAL_VOICE_BUILD=PASS',
+  'VMWARE_UEFI_BOOT=PASS',
+  'VMWARE_SCREENREADER_DISCOVERY=PASS'
+)
+if (Test-Path $evidenceFile) {
+  $summary += Get-Content -LiteralPath $evidenceFile
+}
+$summary | Set-Content -LiteralPath $summaryFile -Encoding utf8
+Write-Host "PSEXEC_PHYSICAL_PIPELINE=PASS"
+ -or
+    $realVoiceCount -ne $expectedRealVoiceCount -or
+    $skippedVoiceCount -ne 0) {
+  throw "Incomplete real Windows voice bank: accepted=$realVoiceCount expected=$expectedRealVoiceCount skipped=$skippedVoiceCount"
+}
+Write-Host "REAL_WINDOWS_VOICE_BANK_COMPLETE=PASS"
+Write-Host "REAL_WINDOWS_VOICE_UNIT_COUNT=$realVoiceCount"
+
 $flags = @(
   '--target=x86_64-pc-windows-msvc',
   '-DQEV_INTERACTIVE_NAV=1',
