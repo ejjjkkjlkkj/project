@@ -1,243 +1,97 @@
-name: vmware-uefi-selfhosted
+name: vmware-uefi-selfhosted-psexec
 
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'voice/**'
+      - 'navigation/**'
+      - '.github/workflows/vmware-uefi-selfhosted.yml'
 
 permissions:
   contents: read
 
 concurrency:
-  group: vmware-uefi-selfhosted
-  cancel-in-progress: false
+  group: vmware-uefi-selfhosted-psexec
+  cancel-in-progress: true
 
 jobs:
-  vmware-uefi-smoke:
+  physical-voice-vmware:
     runs-on: [self-hosted, Windows, X64]
-    timeout-minutes: 20
+    timeout-minutes: 25
 
     steps:
       - name: Checkout
         uses: actions/checkout@v5
 
-      - name: Verify VMware Workstation
+      - name: Run all Windows project work through PsExec
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-
-          function Find-Vmrun {
-            $candidates = @(
-              "$env:ProgramFiles\VMware\VMware Workstation\vmrun.exe",
-              "${env:ProgramFiles(x86)}\VMware\VMware Workstation\vmrun.exe"
-            )
-            foreach ($p in $candidates) {
-              if ($p -and (Test-Path $p)) { return $p }
-            }
-            return $null
+          $psexec = 'C:\Users\adm\Downloads\PsExec64.exe'
+          if (-not (Test-Path -LiteralPath $psexec)) {
+            throw "Required PsExec not found: $psexec"
           }
 
-          $vmrun = Find-Vmrun
-          if (-not $vmrun) {
-            throw "VMware Workstation is not installed on this trusted runner. Install it from the Broadcom Support Portal, then rerun this workflow."
+          $sessionProbe = & $psexec -accepteula -nobanner -s powershell.exe -NoProfile -Command "(Get-Process explorer -ErrorAction SilentlyContinue | Where-Object { `$_.SessionId -gt 0 } | Select-Object -First 1 -ExpandProperty SessionId)"
+          if ($LASTEXITCODE -ne 0) {
+            throw "PsExec session probe failed with exit code $LASTEXITCODE"
           }
-
-          $auth = Get-Service -Name VMAuthdService -ErrorAction SilentlyContinue
-          if ($auth -and $auth.Status -ne 'Running') {
-            Start-Service VMAuthdService
+          $sessionId = @($sessionProbe | ForEach-Object { "$_".Trim() } | Where-Object { $_ -match '^\d+$' } | Select-Object -Last 1)
+          if (-not $sessionId) {
+            throw "No active Explorer desktop session found. Keep the Windows desktop session logged in."
           }
+          $sessionId = [int]$sessionId
+          Write-Host "PSEXEC_PATH=$psexec"
+          Write-Host "PSEXEC_INTERACTIVE_SESSION=$sessionId"
 
-          $version = (Get-Item $vmrun).VersionInfo.FileVersion
-          "VMRUN=$vmrun" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          "VMWARE_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          Write-Host "VMWARE_WORKSTATION=PASS"
-          Write-Host "VMWARE_VERSION=$version"
-          & $vmrun -T ws list
-
-      - name: Ensure LLVM toolchain
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $clangCmd = Get-Command clang.exe -ErrorAction SilentlyContinue
-          $lldCmd = Get-Command lld-link.exe -ErrorAction SilentlyContinue
-          $clang = if ($clangCmd) { $clangCmd.Source } else { $null }
-          $lld = if ($lldCmd) { $lldCmd.Source } else { $null }
-
-          if (-not $clang -or -not $lld) {
-            $winget = Get-Command winget.exe -ErrorAction SilentlyContinue
-            if (-not $winget) {
-              throw "LLVM is missing and winget is unavailable."
-            }
-            winget install --id LLVM.LLVM -e --source winget --accept-package-agreements --accept-source-agreements --silent --disable-interactivity
-            $env:Path = "C:\Program Files\LLVM\bin;$env:Path"
-            $clangCmd = Get-Command clang.exe -ErrorAction SilentlyContinue
-            $lldCmd = Get-Command lld-link.exe -ErrorAction SilentlyContinue
-            $clang = if ($clangCmd) { $clangCmd.Source } else { $null }
-            $lld = if ($lldCmd) { $lldCmd.Source } else { $null }
-          }
-
-          if (-not $clang -or -not $lld) { throw "LLVM toolchain unavailable." }
-          "CLANG=$clang" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          "LLDLINK=$lld" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          & $clang --version
-
-      - name: Build NAVIGATION.EFI
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          New-Item -ItemType Directory -Force build | Out-Null
-          python navigation/uefi/generate_units.py build/navigation_units.c build/navigation_units.txt
-
-          $flags = @(
-            '--target=x86_64-pc-windows-msvc',
-            '-DQEV_INTERACTIVE_NAV=1',
-            '-ffreestanding',
-            '-fshort-wchar',
-            '-fno-stack-protector',
-            '-fno-builtin',
-            '-mno-red-zone',
-            '-nostdlib',
-            '-O2',
-            '-Wall',
-            '-Wextra',
-            '-Werror'
+          $stage = Join-Path $PWD 'navigation\uefi\psexec_vmware_voice_test.ps1'
+          $args = @(
+            '-accepteula',
+            '-nobanner',
+            '-s',
+            '-h',
+            '-i',
+            "$sessionId",
+            'powershell.exe',
+            '-NoProfile',
+            '-ExecutionPolicy',
+            'Bypass',
+            '-File',
+            $stage,
+            '-Workspace',
+            $PWD.Path,
+            '-RunId',
+            $env:GITHUB_RUN_ID
           )
+          & $psexec @args
 
-          & $env:CLANG @flags -c navigation/uefi/semantic_core.c -o build/semantic_core.obj
-          if ($LASTEXITCODE) { exit $LASTEXITCODE }
-          & $env:CLANG @flags -c navigation/uefi/hii_graph_prompt_speech_uefi.c -o build/navigation.obj
-          if ($LASTEXITCODE) { exit $LASTEXITCODE }
-          & $env:CLANG @flags -c build/navigation_units.c -o build/navigation_units.obj
-          if ($LASTEXITCODE) { exit $LASTEXITCODE }
-
-          & $env:LLDLINK /subsystem:efi_application /entry:efi_main /nodefaultlib /machine:x64 /timestamp:0 /out:build/NAVIGATION.EFI build/navigation.obj build/navigation_units.obj build/semantic_core.obj
-          if ($LASTEXITCODE) { exit $LASTEXITCODE }
-
-          if (-not (Test-Path build/NAVIGATION.EFI)) { throw "NAVIGATION.EFI missing" }
-          Write-Host "NAVIGATION_EFI_BUILD=PASS"
-
-      - name: Build VMware removable UEFI media
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $vmDir = Join-Path $PWD "build\vmware-smoke-$env:GITHUB_RUN_ID"
-          New-Item -ItemType Directory -Force $vmDir | Out-Null
-
-          $img = Join-Path $vmDir "uefi-floppy.img"
-          python navigation/uefi/create_fat12_boot_image.py build/NAVIGATION.EFI $img
-          if ($LASTEXITCODE) { exit $LASTEXITCODE }
-
-          $vmx = Join-Path $vmDir "qevarynx-uefi.vmx"
-          @'
-          .encoding = "windows-1252"
-          config.version = "8"
-          virtualHW.version = "20"
-          displayName = "QEVARYNOX UEFI VMware CI"
-          guestOS = "other-64"
-          firmware = "efi"
-          uefi.secureBoot.enabled = "FALSE"
-          memsize = "512"
-          numvcpus = "1"
-          cpuid.coresPerSocket = "1"
-          floppy0.present = "TRUE"
-          floppy0.fileType = "file"
-          floppy0.fileName = "uefi-floppy.img"
-          floppy0.startConnected = "TRUE"
-          bios.bootOrder = "floppy"
-          serial0.present = "TRUE"
-          serial0.fileType = "file"
-          serial0.fileName = "serial.log"
-          serial0.tryNoRxLoss = "FALSE"
-          sound.present = "TRUE"
-          sound.virtualDev = "hdaudio"
-          sound.autodetect = "TRUE"
-          ethernet0.present = "FALSE"
-          usb.present = "FALSE"
-          tools.syncTime = "FALSE"
-          '@ | Set-Content -Path $vmx -Encoding ascii
-
-          "VMWARE_TEST_DIR=$vmDir" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          "VMX_PATH=$vmx" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          Write-Host "VMWARE_MEDIA=PASS"
-
-      - name: Boot real NAVIGATION.EFI in VMware UEFI
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $serial = Join-Path $env:VMWARE_TEST_DIR "serial.log"
-
-          try {
-            & $env:VMRUN -T ws start $env:VMX_PATH nogui
-            if ($LASTEXITCODE) { throw "vmrun start failed with $LASTEXITCODE" }
-
-            $deadline = (Get-Date).AddSeconds(60)
-            while ((Get-Date) -lt $deadline) {
-              if (Test-Path $serial) {
-                $text = Get-Content -Raw -Path $serial -ErrorAction SilentlyContinue
-                if ($text -match 'HII_GRAPH_NAV_DISCOVERY_PROMPT=PASS' -or $text -match 'STATUS=BLOCKED') {
-                  break
-                }
-              }
-              Start-Sleep -Seconds 1
-            }
-
-            if (-not (Test-Path $serial)) {
-              throw "No VMware serial log was created; EFI did not reach the configured COM port."
-            }
-
-            $text = Get-Content -Raw -Path $serial
-            $text | Set-Content -Path (Join-Path $env:VMWARE_TEST_DIR "serial-final.txt") -Encoding utf8
-
-            if ($text -notmatch 'QEVARYNOX-UEFI-HII-GRAPH-PROMPT-SPEECH-V1') {
-              throw "VMware UEFI did not execute NAVIGATION.EFI."
-            }
-            if ($text -notmatch 'STATE=START') {
-              throw "NAVIGATION.EFI entry marker missing."
-            }
-
-            Write-Host "VMWARE_UEFI_BOOT=PASS"
-
-            if ($text -match 'HDA_CONTROLLER_CODEC=PASS') {
-              Write-Host "VMWARE_HDA_DISCOVERY=PASS"
-            } else {
-              Write-Host "VMWARE_HDA_DISCOVERY=NOT_ESTABLISHED"
-            }
-
-            if ($text -match 'HII_GRAPH_NAV_DISCOVERY_PROMPT=PASS') {
-              Write-Host "VMWARE_SCREENREADER_DISCOVERY=PASS"
-            } else {
-              $reason = [regex]::Match($text, 'REASON=([^\r\n]+)').Groups[1].Value
-              if (-not $reason) { $reason = 'DISCOVERY_PROMPT_NOT_REACHED' }
-              throw "Screen-reader runtime did not reach discovery prompt: $reason"
-            }
-          }
-          finally {
-            & $env:VMRUN -T ws stop $env:VMX_PATH hard 2>$null
+          if ($LASTEXITCODE -ne 0) {
+            throw "PsExec physical pipeline failed with exit code $LASTEXITCODE"
           }
 
-      - name: Summarize VMware evidence
-        if: always()
-        shell: pwsh
-        run: |
-          "## VMware UEFI self-hosted test" >> $env:GITHUB_STEP_SUMMARY
-          "- VMware: $env:VMWARE_VERSION" >> $env:GITHUB_STEP_SUMMARY
-          "- VMX: $env:VMX_PATH" >> $env:GITHUB_STEP_SUMMARY
-          if (Test-Path "$env:VMWARE_TEST_DIR\serial-final.txt") {
-            $t = Get-Content -Raw "$env:VMWARE_TEST_DIR\serial-final.txt"
-            "- EFI entry: " + $(if ($t -match 'STATE=START') {'PASS'} else {'FAIL'}) >> $env:GITHUB_STEP_SUMMARY
-            "- HDA discovery: " + $(if ($t -match 'HDA_CONTROLLER_CODEC=PASS') {'PASS'} else {'NOT_ESTABLISHED'}) >> $env:GITHUB_STEP_SUMMARY
-            "- Screen-reader discovery: " + $(if ($t -match 'HII_GRAPH_NAV_DISCOVERY_PROMPT=PASS') {'PASS'} else {'FAIL'}) >> $env:GITHUB_STEP_SUMMARY
+          if (-not (Test-Path 'build\psexec-physical-summary.txt')) {
+            throw "PsExec summary evidence missing"
           }
+          Get-Content 'build\psexec-physical-summary.txt'
+          Write-Host 'WINDOWS_PROJECT_EXECUTION_VIA_PSEXEC=PASS'
 
-      - name: Upload VMware evidence
+      - name: Upload PsExec physical evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: vmware-uefi-evidence
+          name: psexec-physical-voice-vmware-evidence
           path: |
             build/NAVIGATION.EFI
             build/navigation_units.txt
+            build/system-voice/system-voice-evidence.txt
+            build/system-voice/quality_reference.wav
+            build/quality-reference-firmware-roundtrip.wav
+            build/quality-reference-firmware-roundtrip.json
+            build/psexec-physical-summary.txt
             build/vmware-smoke-*/serial.log
             build/vmware-smoke-*/serial-final.txt
-            build/vmware-smoke-*/vmware.log
             build/vmware-smoke-*/*.vmx
             build/vmware-smoke-*/uefi-floppy.img
           if-no-files-found: warn
