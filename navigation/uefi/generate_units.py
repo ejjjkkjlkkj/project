@@ -5,7 +5,7 @@ from pathlib import Path
 
 ROOT=Path(__file__).resolve().parents[2]
 SOURCE=ROOT/'voice'/'v4'/'native_speech_v4.py'
-SOURCE_RATE=24000
+SOURCE_RATE=16000 if os.environ.get('QEV_EXTERNAL_VOICE_DIR','').strip() else 24000
 UNIT_ENCODING_MULAW=1
 UEFI_VOICE_PROFILE='clair'
 MAX_BANK_BYTES=1200*1024
@@ -223,18 +223,20 @@ def _mulaw_to_linear(code):
     sample-=MULAW_BIAS
     return -sample if (u & 0x80) else sample
 
-def _to_mulaw_24k(samples):
-    # VoiceCore renders 48 kHz signed-16 mono. Downsample by 2 with a
-    # deterministic box low-pass, then G.711 mu-law compand to 8 bits.
-    # Compared with the former 16 kHz linear-u8 bank this preserves far more
-    # low-level consonant detail while keeping the firmware footprint bounded.
+def _to_mulaw_source_rate(samples):
+    # VoiceCore renders 48 kHz signed-16 mono. Hardware real-voice builds use
+    # 16 kHz mu-law to reserve firmware space for complete SAPI phrases; normal
+    # deterministic CI keeps 24 kHz. Both divide 48 kHz exactly.
+    if SOURCE_RATE <= 0 or 48000 % SOURCE_RATE:
+        raise SystemExit(f'unsupported source sample rate: {SOURCE_RATE}')
+    factor=48000//SOURCE_RATE
     out=bytearray()
-    for i in range(0,len(samples)-1,2):
-        avg=(int(samples[i])+int(samples[i+1]))//2
+    for i in range(0,len(samples)-factor+1,factor):
+        avg=sum(int(samples[i+j]) for j in range(factor))//factor
         out.append(_linear_to_mulaw(avg))
     return bytes(out)
 
-def _wav_to_mulaw_24k(path: Path) -> bytes:
+def _wav_to_mulaw_source_rate(path: Path) -> bytes:
     with wave.open(str(path), 'rb') as w:
         channels=w.getnchannels()
         width=w.getsampwidth()
@@ -314,7 +316,7 @@ def apply_external_voice_units(units, names):
         path=voice_dir/(name+'.wav')
         if not path.is_file():
             continue
-        encoded=_wav_to_mulaw_24k(path)
+        encoded=_wav_to_mulaw_source_rate(path)
         projected=current-len(result[name])+len(encoded)
         if projected > MAX_BANK_BYTES:
             skipped.append(name)
@@ -329,13 +331,13 @@ def apply_external_voice_units(units, names):
 def make_source_units(speech):
     units={'sil':bytes([_linear_to_mulaw(0)])*(SOURCE_RATE*70//1000)}
     for ch,seq in PHONEME_LETTER_UNITS.items():
-        units[f'letter_{ch}']=_to_mulaw_24k(_render_sequence(speech,seq))
+        units[f'letter_{ch}']=_to_mulaw_source_rate(_render_sequence(speech,seq))
     for ch,seq in PHONEME_DIGIT_UNITS.items():
-        units[f'digit_{ch}']=_to_mulaw_24k(_render_sequence(speech,seq))
+        units[f'digit_{ch}']=_to_mulaw_source_rate(_render_sequence(speech,seq))
     for word,seq in PHONEME_WORD_UNITS.items():
-        units[f'word_{word}']=_to_mulaw_24k(_render_sequence(speech,seq))
+        units[f'word_{word}']=_to_mulaw_source_rate(_render_sequence(speech,seq))
     for index,phrase in enumerate(PHRASE_TEXTS):
-        units[_phrase_unit_name(index)]=_to_mulaw_24k(speech.synthesize(phrase, UEFI_VOICE_PROFILE))
+        units[_phrase_unit_name(index)]=_to_mulaw_source_rate(speech.synthesize(phrase, UEFI_VOICE_PROFILE))
     return units
 
 WORD_NAME_STRIDE=16
@@ -393,8 +395,9 @@ def main():
     )
     source_units=make_source_units(speech)
     source_units, external_units, skipped_external_units = apply_external_voice_units(source_units, names)
-    # Keep compact 24 kHz G.711 mu-law clips in the EFI image. The firmware
-    # decodes and linearly upsamples them to 48 kHz signed-16 stereo.
+    # Keep compact G.711 mu-law clips in the EFI image. Real-voice hardware
+    # builds use 16 kHz to prioritize complete human speech phrases; normal CI
+    # uses 24 kHz. Firmware decodes and upsamples to 48 kHz signed-16 stereo.
     converted={n:source_units[n] for n in names}
     offsets=[]; lengths=[]; bank=bytearray()
     for n in names:
@@ -498,7 +501,7 @@ def main():
         'inter-letter-silence-ms=18-runtime-gap\n'
         'intra-word-phoneme-silence-ms=0\n'
         'word-silence-ms=70\n'
-        'speech-mode=' + ('hybrid-system-speech-plus-voicecore-v4-uefi-v10' if external_units else 'whole-phrase-voicecore-v4-uefi-v8-mulaw24k') + '\n'
+        'speech-mode=' + ('hybrid-system-speech-16k-plus-voicecore-v4-uefi-v11' if external_units else 'whole-phrase-voicecore-v4-uefi-v8-mulaw24k') + '\n'
         'full-utterance-asset=' + ('true' if external_units and all(_phrase_unit_name(i) in external_units for i in range(len(PHRASE_TEXTS))) else 'false') + '\n'
     )
     print('HII_GRAPH_PROMPT_UNIT_GENERATION=PASS')
