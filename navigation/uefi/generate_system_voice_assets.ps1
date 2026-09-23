@@ -67,7 +67,7 @@ function Write-VoiceWav([string]$FileName, [string]$Text, [string]$VoiceName, [i
     # UEFI v12 quality contract: make SAPI emit exactly the format embedded by
     # the firmware bank. This avoids an extra host-side sample-rate conversion,
     # which was adding aliasing to consonants before G.711 mu-law encoding.
-    $format = New-Object System.Speech.AudioFormat.SpeechAudioFormatInfo(
+    $format = [System.Speech.AudioFormat.SpeechAudioFormatInfo]::new(
       16000,
       [System.Speech.AudioFormat.AudioBitsPerSample]::Sixteen,
       [System.Speech.AudioFormat.AudioChannel]::Mono
