@@ -5,7 +5,7 @@ from pathlib import Path
 
 ROOT=Path(__file__).resolve().parents[2]
 SOURCE=ROOT/'voice'/'v4'/'native_speech_v4.py'
-SOURCE_RATE=16000 if os.environ.get('QEV_EXTERNAL_VOICE_DIR','').strip() else 24000
+SOURCE_RATE=24000
 UNIT_ENCODING_MULAW=1
 UEFI_VOICE_PROFILE='clair'
 MAX_BANK_BYTES=1200*1024
@@ -224,9 +224,9 @@ def _mulaw_to_linear(code):
     return -sample if (u & 0x80) else sample
 
 def _to_mulaw_source_rate(samples):
-    # VoiceCore renders 48 kHz signed-16 mono. Hardware real-voice builds use
-    # 16 kHz mu-law to reserve firmware space for complete SAPI phrases; normal
-    # deterministic CI keeps 24 kHz. Both divide 48 kHz exactly.
+    # VoiceCore renders 48 kHz signed-16 mono. All firmware banks now use
+    # 24 kHz mu-law so the 48 kHz HDA path is an exact x2 conversion and the
+    # physical build does not lose the upper consonant band used for clarity.
     if SOURCE_RATE <= 0 or 48000 % SOURCE_RATE:
         raise SystemExit(f'unsupported source sample rate: {SOURCE_RATE}')
     factor=48000//SOURCE_RATE
@@ -236,6 +236,70 @@ def _to_mulaw_source_rate(samples):
         out.append(_linear_to_mulaw(avg))
     return bytes(out)
 
+def _condition_external_pcm(mono, rate):
+    if not mono:
+        raise SystemExit('empty real-voice PCM')
+    # Remove DC before companding. A biased waveform wastes mu-law range and
+    # raises the apparent noise floor on quiet firmware prompts.
+    dc=sum(mono)//len(mono)
+    mono=[max(-32768,min(32767,int(x)-dc)) for x in mono]
+
+    # Trim only true low-level lead/tail noise, retaining 30 ms guard bands so
+    # fricatives and breathy consonant onsets are not chopped.
+    peak=max(abs(x) for x in mono)
+    if peak < 256:
+        raise SystemExit('real-voice PCM has no usable speech level')
+    threshold=max(96, peak//180)
+    first=0
+    while first < len(mono) and abs(mono[first]) < threshold:
+        first+=1
+    last=len(mono)
+    while last > first and abs(mono[last-1]) < threshold:
+        last-=1
+    pad=max(1, rate*30//1000)
+    first=max(0, first-pad)
+    last=min(len(mono), last+pad)
+    mono=mono[first:last] if first < last else mono
+
+    # Keep deterministic headroom. This prevents SAPI peaks from becoming
+    # crackle after mu-law companding and the 24 -> 48 kHz interpolation.
+    peak=max(abs(x) for x in mono)
+    target_peak=26000
+    if 0 < peak < target_peak:
+        mono=[max(-32768,min(32767,(x*target_peak)//peak)) for x in mono]
+    elif peak > target_peak:
+        mono=[max(-target_peak,min(target_peak,x)) for x in mono]
+
+    # Soft gate only the sub-audible residual floor. The transition band avoids
+    # hard discontinuities that would themselves create clicks.
+    gate=max(20, target_peak//1024)
+    gate_hi=gate*4
+    cleaned=[]
+    for x in mono:
+        a=abs(x)
+        if a <= gate:
+            y=0
+        elif a < gate_hi:
+            y=((a-gate)*gate_hi)//(gate_hi-gate)
+            if x < 0:
+                y=-y
+        else:
+            y=x
+        cleaned.append(y)
+    mono=cleaned
+
+    # 6 ms squared fades suppress boundary clicks between whole-word/phrase
+    # clips without audibly eating consonants.
+    fade=max(1, rate*6//1000)
+    fade=min(fade,len(mono)//2)
+    denom=max(1,fade*fade)
+    for i in range(fade):
+        gain=i*i
+        mono[i]=(mono[i]*gain)//denom
+        j=len(mono)-1-i
+        mono[j]=(mono[j]*gain)//denom
+    return mono
+
 def _wav_to_mulaw_source_rate(path: Path) -> bytes:
     with wave.open(str(path), 'rb') as w:
         channels=w.getnchannels()
@@ -244,8 +308,7 @@ def _wav_to_mulaw_source_rate(path: Path) -> bytes:
         frames=w.getnframes()
         comptype=w.getcomptype()
         # Real SYSTEM speech is generated in the exact bank format. Reject any
-        # implicit host conversion here: double resampling was a major source
-        # of metallic/garbled consonants on the physical HDA path.
+        # implicit host conversion: every extra resample can add metallic edges.
         if channels != 1 or width != 2 or rate != SOURCE_RATE or comptype != 'NONE':
             raise SystemExit(
                 f'real-voice WAV must be PCM mono 16-bit {SOURCE_RATE} Hz: '
@@ -256,44 +319,7 @@ def _wav_to_mulaw_source_rate(path: Path) -> bytes:
     mono=[int(x) for x in struct.unpack('<' + 'h'*(len(raw)//2), raw)]
     if not mono:
         raise SystemExit(f'empty real-voice WAV: {path}')
-
-    # Remove DC bias before companding. A biased waveform wastes mu-law range
-    # and makes quiet consonants harder to distinguish.
-    dc=sum(mono)//len(mono)
-    mono=[max(-32768,min(32767,x-dc)) for x in mono]
-
-    # Remove excessive SAPI lead/tail silence while keeping 25 ms safety pads.
-    peak=max(abs(x) for x in mono)
-    if peak < 256:
-        raise SystemExit(f'real-voice WAV has no usable speech level: {path}')
-    threshold=max(160, peak//120)
-    first=0
-    while first < len(mono) and abs(mono[first]) < threshold:
-        first+=1
-    last=len(mono)
-    while last > first and abs(mono[last-1]) < threshold:
-        last-=1
-    pad=max(1, rate*25//1000)
-    first=max(0, first-pad)
-    last=min(len(mono), last+pad)
-    mono=mono[first:last] if first < last else mono
-
-    # Keep headroom while lifting weak SYSTEM voices before G.711 mu-law.
-    # 28k avoids hard clipping on interpolation/codec paths but uses most of
-    # the signed-16 dynamic range.
-    peak=max(abs(x) for x in mono)
-    target_peak=28000
-    if 0 < peak < target_peak:
-        mono=[max(-32768,min(32767,(x*target_peak)//peak)) for x in mono]
-
-    # A short fade suppresses clicks caused by hard clipping at trim edges.
-    fade=max(1, rate*2//1000)
-    fade=min(fade,len(mono)//2)
-    for i in range(fade):
-        mono[i]=(mono[i]*i)//fade
-        j=len(mono)-1-i
-        mono[j]=(mono[j]*i)//fade
-
+    mono=_condition_external_pcm(mono, rate)
     return bytes(_linear_to_mulaw(x) for x in mono)
 
 def _external_unit_order(names):
@@ -408,9 +434,9 @@ def main():
     )
     source_units=make_source_units(speech)
     source_units, external_units, skipped_external_units = apply_external_voice_units(source_units, names)
-    # Keep compact G.711 mu-law clips in the EFI image. Real-voice hardware
-    # builds use 16 kHz to prioritize complete human speech phrases; normal CI
-    # uses 24 kHz. Firmware decodes and upsamples to 48 kHz signed-16 stereo.
+    # Keep compact G.711 mu-law clips in the EFI image at 24 kHz for both CI
+    # and physical builds. Firmware performs an exact x2 interpolation to the
+    # 48 kHz signed-16 stereo HDA stream.
     converted={n:source_units[n] for n in names}
     offsets=[]; lengths=[]; bank=bytearray()
     for n in names:
@@ -514,7 +540,8 @@ def main():
         'inter-letter-silence-ms=18-runtime-gap\n'
         'intra-word-phoneme-silence-ms=0\n'
         'word-silence-ms=70\n'
-        'speech-mode=' + ('hybrid-system-speech-clean-pcm16k-plus-voicecore-v4-uefi-v12' if external_units else 'whole-phrase-voicecore-v4-uefi-v8-mulaw24k') + '\n'
+        'speech-mode=' + ('hybrid-system-speech-clean-mulaw24k-plus-voicecore-v4-uefi-v13' if external_units else 'whole-phrase-voicecore-v4-uefi-v8-mulaw24k') + '\n'
+        'voice-cleaning=dc-trim-soft-gate-headroom26k-fade6ms\n'
         'full-utterance-asset=' + ('true' if external_units and all(_phrase_unit_name(i) in external_units for i in range(len(PHRASE_TEXTS))) else 'false') + '\n'
     )
     print('HII_GRAPH_PROMPT_UNIT_GENERATION=PASS')
