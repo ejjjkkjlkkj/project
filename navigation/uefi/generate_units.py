@@ -498,8 +498,8 @@ def main():
         'inter-letter-silence-ms=18-runtime-gap\n'
         'intra-word-phoneme-silence-ms=0\n'
         'word-silence-ms=70\n'
-        'speech-mode=hybrid-system-speech-plus-voicecore-v4-uefi-v10\n'
-        'full-utterance-asset=' + ('true' if all(_phrase_unit_name(i) in external_units for i in range(len(PHRASE_TEXTS))) else 'false') + '\n'
+        'speech-mode=' + ('hybrid-system-speech-plus-voicecore-v4-uefi-v10' if external_units else 'whole-phrase-voicecore-v4-uefi-v8-mulaw24k') + '\n'
+        'full-utterance-asset=' + ('true' if external_units and all(_phrase_unit_name(i) in external_units for i in range(len(PHRASE_TEXTS))) else 'false') + '\n'
     )
     print('HII_GRAPH_PROMPT_UNIT_GENERATION=PASS')
     print('UNIT_COUNT='+str(len(names)))
