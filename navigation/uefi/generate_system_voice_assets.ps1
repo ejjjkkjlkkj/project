@@ -48,6 +48,10 @@ $voiceEvidence = @(
   "SYSTEM_SPEECH_FR_CULTURE=$($fr.VoiceInfo.Culture.Name)"
   "SYSTEM_SPEECH_EN=$($en.VoiceInfo.Name)"
   "SYSTEM_SPEECH_EN_CULTURE=$($en.VoiceInfo.Culture.Name)"
+  "SYSTEM_SPEECH_OUTPUT_RATE=16000"
+  "SYSTEM_SPEECH_OUTPUT_BITS=16"
+  "SYSTEM_SPEECH_OUTPUT_CHANNELS=1"
+  "SYSTEM_SPEECH_OUTPUT_ENCODING=PCM"
 )
 $voiceEvidence | Set-Content -Path (Join-Path $OutDir 'system-voice-evidence.txt') -Encoding utf8
 $probe.Dispose()
@@ -57,9 +61,18 @@ function Write-VoiceWav([string]$FileName, [string]$Text, [string]$VoiceName, [i
   $synth = New-Object System.Speech.Synthesis.SpeechSynthesizer
   try {
     $synth.SelectVoice($VoiceName)
-    $synth.Rate = $Rate
+    $synth.Rate = [Math]::Max(-2, [Math]::Min(2, $Rate))
     $synth.Volume = 100
-    $synth.SetOutputToWaveFile($path)
+
+    # UEFI v12 quality contract: make SAPI emit exactly the format embedded by
+    # the firmware bank. This avoids an extra host-side sample-rate conversion,
+    # which was adding aliasing to consonants before G.711 mu-law encoding.
+    $format = New-Object System.Speech.AudioFormat.SpeechAudioFormatInfo(
+      16000,
+      [System.Speech.AudioFormat.AudioBitsPerSample]::Sixteen,
+      [System.Speech.AudioFormat.AudioChannel]::Mono
+    )
+    $synth.SetOutputToWaveFile($path, $format)
     $synth.Speak($Text)
   }
   finally {
@@ -71,16 +84,16 @@ function Write-VoiceWav([string]$FileName, [string]$Text, [string]$VoiceName, [i
 }
 
 foreach ($key in $letters.Keys) {
-  Write-VoiceWav ("letter_{0}.wav" -f $key) ([string]$letters[$key]) $fr.VoiceInfo.Name 1
+  Write-VoiceWav ("letter_{0}.wav" -f $key) ([string]$letters[$key]) $fr.VoiceInfo.Name 0
 }
 foreach ($key in $digits.Keys) {
-  Write-VoiceWav ("digit_{0}.wav" -f $key) ([string]$digits[$key]) $fr.VoiceInfo.Name 1
+  Write-VoiceWav ("digit_{0}.wav" -f $key) ([string]$digits[$key]) $fr.VoiceInfo.Name 0
 }
 foreach ($w in $words) {
-  Write-VoiceWav ("word_{0}.wav" -f $w) ([string]$w) $en.VoiceInfo.Name 1
+  Write-VoiceWav ("word_{0}.wav" -f $w) ([string]$w) $en.VoiceInfo.Name 0
 }
 for ($i = 0; $i -lt $phrases.Count; $i++) {
-  Write-VoiceWav ("phrase_{0}.wav" -f $i) ([string]$phrases[$i]) $fr.VoiceInfo.Name 1
+  Write-VoiceWav ("phrase_{0}.wav" -f $i) ([string]$phrases[$i]) $fr.VoiceInfo.Name 0
 }
 
 $generated = @(Get-ChildItem -Path $OutDir -Filter '*.wav')
