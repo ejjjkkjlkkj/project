@@ -296,14 +296,18 @@ def _wav_to_mulaw_source_rate(path: Path) -> bytes:
 
     return bytes(_linear_to_mulaw(x) for x in mono)
 
-def _external_unit_order(names):
+def _external_required_names():
     phrases=[_phrase_unit_name(i) for i in range(len(PHRASE_TEXTS))]
     letters=[f'letter_{ch}' for ch in 'abcdefghijklmnopqrstuvwxyz']
     digits=[f'digit_{ch}' for ch in '0123456789']
-    words=[
-        # Highest-value ASUS/AMI setup tabs and commit actions first. Keeping
-        # these as complete System.Speech clips avoids synthetic fallback in
-        # the screens a blind user must traverse most often.
+    # Real-voice mode must never fall back to VoiceCore for arbitrary labels.
+    # Complete guidance phrases plus every letter and digit are therefore
+    # mandatory. Unknown words can always be spoken by spelling them with
+    # these real Windows voice clips.
+    return phrases+letters+digits
+
+def _external_word_order():
+    preferred=[
         'word_main','word_advanced','word_boot','word_security','word_save',
         'word_exit','word_setup','word_bios','word_system','word_settings',
         'word_enabled','word_disabled','word_option','word_value','word_device',
@@ -314,41 +318,70 @@ def _external_unit_order(names):
         'word_right','word_change','word_action','word_checked','word_back',
         'word_button',
     ]
-    # Physical intelligibility priority: keep complete guidance phrases
-    # first, then common BIOS words as whole clips. Letters remain the final
-    # fallback for unknown labels. The previous phrases+letters+digits+words
-    # order exhausted the 1.2 MiB bank before any real whole-word clips could
-    # be accepted, forcing navigation labels back to synthetic VoiceCore.
-    ordered=phrases+words+digits+letters
-    return [n for n in ordered if n in names]
+    known={f'word_{word}' for word in PHONEME_WORD_UNITS}
+    return preferred + sorted(known-set(preferred))
 
-def apply_external_voice_units(units, names):
+def _real_voice_word_units(available_names):
+    available=set(available_names)
+    result={}
+    for word in PHONEME_WORD_UNITS:
+        clip=f'word_{word}'
+        if clip in available:
+            result[word]=(clip,)
+            continue
+        # No parametric/VoiceCore fallback in real-voice mode. Spell the word
+        # using complete System.Speech letter clips instead.
+        seq=tuple(f'letter_{ch}' for ch in word if 'a' <= ch <= 'z')
+        if not seq or len(seq)>WORD_UNIT_STRIDE:
+            raise SystemExit(f'real-voice word fallback is not representable: {word}')
+        result[word]=seq
+    return result
+
+def build_external_voice_units():
     root=os.environ.get('QEV_EXTERNAL_VOICE_DIR','').strip()
     if not root:
-        return units, [], []
+        raise SystemExit('QEV_EXTERNAL_VOICE_DIR is required for real-voice mode')
     voice_dir=Path(root)
     if not voice_dir.is_dir():
         raise SystemExit(f'QEV_EXTERNAL_VOICE_DIR not found: {voice_dir}')
+    if SOURCE_RATE != 16000:
+        raise SystemExit(f'real-voice mode requires 16000 Hz source rate, got {SOURCE_RATE}')
 
-    result=dict(units)
-    current=sum(len(result[n]) for n in names)
+    result={'sil':bytes([_linear_to_mulaw(0)])*(SOURCE_RATE*70//1000)}
     accepted=[]
     skipped=[]
-    for name in _external_unit_order(names):
+    current=len(result['sil'])
+
+    for name in _external_required_names():
+        path=voice_dir/(name+'.wav')
+        if not path.is_file():
+            raise SystemExit(f'mandatory real-voice asset missing: {path}')
+        encoded=_wav_to_mulaw_source_rate(path)
+        projected=current+len(encoded)
+        if projected > MAX_BANK_BYTES:
+            raise SystemExit(
+                f'mandatory real-voice bank exceeds limit at {name}: '
+                f'{projected}>{MAX_BANK_BYTES}'
+            )
+        result[name]=encoded
+        accepted.append(name)
+        current=projected
+
+    for name in _external_word_order():
         path=voice_dir/(name+'.wav')
         if not path.is_file():
             continue
         encoded=_wav_to_mulaw_source_rate(path)
-        projected=current-len(result[name])+len(encoded)
+        projected=current+len(encoded)
         if projected > MAX_BANK_BYTES:
             skipped.append(name)
             continue
-        current=projected
         result[name]=encoded
         accepted.append(name)
-    if not accepted:
-        raise SystemExit('real-voice directory present but no WAV asset was accepted')
-    return result, accepted, skipped
+        current=projected
+
+    word_units=_real_voice_word_units(result)
+    return result, accepted, skipped, word_units
 
 def make_source_units(speech):
     units={'sil':bytes([_linear_to_mulaw(0)])*(SOURCE_RATE*70//1000)}
@@ -405,21 +438,34 @@ def main():
     if len(sys.argv)!=3:
         raise SystemExit('usage: generate_units.py OUTPUT_C METADATA')
     out=Path(sys.argv[1]); meta=Path(sys.argv[2])
-    speech=load_source()
-    if speech.SAMPLE_RATE != 48000:
-        raise SystemExit(f'VoiceCore v4 unexpected render rate: {speech.SAMPLE_RATE}')
-    names=sorted(
-        {'sil'}
-        | {u for seq in LETTER_UNITS.values() for u in seq}
-        | {u for seq in DIGIT_UNITS.values() for u in seq}
-        | {u for seq in WORD_UNITS.values() for u in seq}
-        | {_phrase_unit_name(i) for i in range(len(PHRASE_TEXTS))}
-    )
-    source_units=make_source_units(speech)
-    source_units, external_units, skipped_external_units = apply_external_voice_units(source_units, names)
+    external_mode=bool(os.environ.get('QEV_EXTERNAL_VOICE_DIR','').strip())
+    if external_mode:
+        source_units, external_units, skipped_external_units, word_units = build_external_voice_units()
+        names=sorted(source_units)
+        source_descriptor='windows-system-speech'
+        source_sha256='external-runtime-assets'
+        voice_profile_metadata='windows-system-speech'
+    else:
+        speech=load_source()
+        if speech.SAMPLE_RATE != 48000:
+            raise SystemExit(f'VoiceCore v4 unexpected render rate: {speech.SAMPLE_RATE}')
+        names=sorted(
+            {'sil'}
+            | {u for seq in LETTER_UNITS.values() for u in seq}
+            | {u for seq in DIGIT_UNITS.values() for u in seq}
+            | {u for seq in WORD_UNITS.values() for u in seq}
+            | {_phrase_unit_name(i) for i in range(len(PHRASE_TEXTS))}
+        )
+        source_units=make_source_units(speech)
+        external_units=[]
+        skipped_external_units=[]
+        word_units=WORD_UNITS
+        source_descriptor='voice/v4/native_speech_v4.py'
+        source_sha256=hashlib.sha256(SOURCE.read_bytes()).hexdigest()
+        voice_profile_metadata=UEFI_VOICE_PROFILE
     # Keep compact G.711 mu-law clips in the EFI image. Real-voice hardware
-    # builds use 16 kHz to prioritize complete human speech phrases; normal CI
-    # uses 24 kHz. Firmware decodes and upsamples to 48 kHz signed-16 stereo.
+    # builds use 16 kHz and contain no VoiceCore waveform fallback; normal CI
+    # keeps the deterministic v4 path at 24 kHz.
     converted={n:source_units[n] for n in names}
     offsets=[]; lengths=[]; bank=bytearray()
     for n in names:
@@ -443,12 +489,12 @@ def main():
         row=[index[u] for u in seq] + [0]*(8-len(seq))
         digit_flat.extend(row)
 
-    word_names=sorted(WORD_UNITS)
+    word_names=sorted(word_units)
     word_name_lens=[]; word_name_flat=[]
     word_unit_counts=[]; word_unit_flat=[]
     for word in word_names:
         encoded=word.encode('ascii')
-        seq=WORD_UNITS[word]
+        seq=word_units[word]
         if len(encoded)>=WORD_NAME_STRIDE:
             raise SystemExit(f'word name too long: {word}')
         if len(seq)>WORD_UNIT_STRIDE:
@@ -470,7 +516,7 @@ def main():
         phrase_name_flat.extend([0]*(PHRASE_NAME_STRIDE-len(encoded)))
         phrase_unit_indices.append(index[_phrase_unit_name(pi)])
     lines=[
-        '/* Generated deterministically from first-party native speech units. */',
+        ('/* Generated from Windows System.Speech real-voice assets; VoiceCore fallback disabled. */' if external_mode else '/* Generated deterministically from first-party native speech units. */'),
         arr_u8('qev_unit_bank',list(bank)),
         f'const unsigned int qev_unit_bank_len = {len(bank)}u;\n',
         arr_u32('qev_unit_off',offsets),
@@ -499,8 +545,8 @@ def main():
     out.write_text('\n'.join(lines))
     meta.write_text(
         'OS-UEFI-HII-GRAPH-PROMPT-SPEECH-UNITS-V1\n'
-        'source=voice/v4/native_speech_v4.py\n'
-        f'source-sha256={hashlib.sha256(SOURCE.read_bytes()).hexdigest()}\n'
+        f'source={source_descriptor}\n'
+        f'source-sha256={source_sha256}\n'
         f'unit-names={",".join(names)}\n'
         f'unit-count={len(names)}\n'
         f'bank-bytes={len(bank)}\n'
@@ -515,7 +561,7 @@ def main():
         f'phrase-clip-count={len(PHRASE_TEXTS)}\n'
         'source-sample-rate-hz='+str(SOURCE_RATE)+'\n'
         'unit-encoding=g711-mulaw-u8\n'
-        'voice-profile='+UEFI_VOICE_PROFILE+'\n'
+        'voice-profile='+voice_profile_metadata+'\n'
         'real-voice-source=' + ('windows-system-speech' if external_units else 'none') + '\n'
         'real-voice-unit-count='+str(len(external_units))+'\n'
         'real-voice-units='+','.join(external_units)+'\n'
@@ -523,12 +569,14 @@ def main():
         'real-voice-word-count='+str(sum(1 for n in external_units if n.startswith('word_')))+'\n'
         'real-voice-digit-count='+str(sum(1 for n in external_units if n.startswith('digit_')))+'\n'
         'real-voice-letter-count='+str(sum(1 for n in external_units if n.startswith('letter_')))+'\n'
-        'real-voice-priority=phrases,words,digits,letters\n'
+        'real-voice-priority=phrases,letters,digits,words\n'
         'inter-letter-silence-ms=18-runtime-gap\n'
         'intra-word-phoneme-silence-ms=0\n'
         'word-silence-ms=70\n'
-        'speech-mode=' + ('hybrid-system-speech-clean-pcm16k-plus-voicecore-v4-uefi-v12' if external_units else 'whole-phrase-voicecore-v4-uefi-v8-mulaw24k') + '\n'
-        'full-utterance-asset=' + ('true' if external_units and all(_phrase_unit_name(i) in external_units for i in range(len(PHRASE_TEXTS))) else 'false') + '\n'
+        'speech-mode=' + ('system-speech-only-uefi-v13-no-voicecore-fallback' if external_mode else 'whole-phrase-voicecore-v4-uefi-v8-mulaw24k') + '\n'
+        'synthetic-voice-fallback=' + ('disabled' if external_mode else 'voicecore-v4') + '\n'
+        'word-fallback=' + ('real-voice-letter-names' if external_mode else 'voicecore-v4-whole-word') + '\n'
+        'full-utterance-asset=' + ('true' if external_mode and all(_phrase_unit_name(i) in external_units for i in range(len(PHRASE_TEXTS))) else 'false') + '\n'
     )
     print('HII_GRAPH_PROMPT_UNIT_GENERATION=PASS')
     print('UNIT_COUNT='+str(len(names)))
