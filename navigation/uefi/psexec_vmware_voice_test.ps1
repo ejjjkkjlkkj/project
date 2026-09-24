@@ -182,13 +182,33 @@ $unitsMetaText = Get-Content -Raw -LiteralPath $unitsMeta
 if ($unitsMetaText -notmatch 'full-utterance-asset=true') {
   throw "All eight real guidance phrase clips were not retained"
 }
-if ($unitsMetaText -notmatch 'real-voice-priority=phrases,words,digits,letters') {
+if ($unitsMetaText -notmatch 'real-voice-priority=phrases,letters,digits,words') {
   throw "Physical intelligibility priority metadata missing"
+}
+if ($unitsMetaText -notmatch 'speech-mode=system-speech-only-uefi-v13-no-voicecore-fallback') {
+  throw "Real-voice-only speech mode is not active"
+}
+if ($unitsMetaText -notmatch 'synthetic-voice-fallback=disabled') {
+  throw "Synthetic VoiceCore fallback is still enabled"
+}
+if ($unitsMetaText -notmatch 'word-fallback=real-voice-letter-names') {
+  throw "Unknown-word fallback is not using real voice letter clips"
+}
+$letterMatch = [regex]::Match($unitsMetaText, 'real-voice-letter-count=(\d+)')
+if (-not $letterMatch.Success -or [int]$letterMatch.Groups[1].Value -ne 26) {
+  throw "All 26 real voice letter clips are required"
+}
+$digitMatch = [regex]::Match($unitsMetaText, 'real-voice-digit-count=(\d+)')
+if (-not $digitMatch.Success -or [int]$digitMatch.Groups[1].Value -ne 10) {
+  throw "All 10 real voice digit clips are required"
 }
 $wordMatch = [regex]::Match($unitsMetaText, 'real-voice-word-count=(\d+)')
 if (-not $wordMatch.Success -or [int]$wordMatch.Groups[1].Value -lt 1) {
   throw "No real whole-word BIOS clips fit in the firmware bank"
 }
+Write-Host "REAL_VOICE_ONLY=PASS"
+Write-Host "REAL_VOICE_LETTERS=$($letterMatch.Groups[1].Value)"
+Write-Host "REAL_VOICE_DIGITS=$($digitMatch.Groups[1].Value)"
 Write-Host "REAL_BIOS_WORD_CLIPS=$($wordMatch.Groups[1].Value)"
 'STAGE=REAL_WORD_BANK_READY' | Add-Content -LiteralPath $globalStageLog -Encoding ascii
 
@@ -341,7 +361,7 @@ if (Test-Path $evidenceFile) {
 }
 if (Test-Path $unitsMeta) {
   $summary += Get-Content -LiteralPath $unitsMeta | Where-Object {
-    $_ -match '^(bank-bytes|real-voice-unit-count|real-voice-units|real-voice-skipped-count|real-voice-word-count|real-voice-digit-count|real-voice-letter-count|real-voice-priority|full-utterance-asset)='
+    $_ -match '^(bank-bytes|real-voice-unit-count|real-voice-units|real-voice-skipped-count|real-voice-word-count|real-voice-digit-count|real-voice-letter-count|real-voice-priority|speech-mode|synthetic-voice-fallback|word-fallback|full-utterance-asset)='
   }
 }
 $summary | Set-Content -LiteralPath $summaryFile -Encoding utf8

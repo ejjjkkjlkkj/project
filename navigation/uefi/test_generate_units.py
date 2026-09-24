@@ -4,7 +4,7 @@ from __future__ import annotations
 from generate_units import (
     DIGIT_UNITS, LETTER_UNITS, WORD_NAME_STRIDE, WORD_UNIT_STRIDE,
     WORD_UNITS, PHRASE_TEXTS, SOURCE_RATE, convert, load_source, make_source_units,
-    _phrase_unit_name,
+    _phrase_unit_name, _real_voice_word_units,
 )
 
 MAX_BANK_BYTES = 128 * 4096 - 0x1000
@@ -36,6 +36,19 @@ def main() -> None:
     assert max(map(len, WORD_UNITS)) < WORD_NAME_STRIDE
     assert max(map(len, WORD_UNITS.values())) <= WORD_UNIT_STRIDE
     assert all(word.isascii() and word.islower() for word in WORD_UNITS)
+
+    # Real-voice physical builds must never route a missing whole-word clip
+    # back to the parametric VoiceCore waveform. They spell it with the
+    # mandatory Windows System.Speech letter clips instead.
+    real_word_units = _real_voice_word_units({"word_boot"})
+    assert real_word_units["boot"] == ("word_boot",)
+    assert real_word_units["security"] == tuple(
+        f"letter_{ch}" for ch in "security"
+    )
+    assert not any(
+        unit.startswith("word_")
+        for unit in real_word_units["security"]
+    )
     assert len(PHRASE_TEXTS) >= 6
     assert "ready press f1 for help" in PHRASE_TEXTS
     assert "no change" in PHRASE_TEXTS
